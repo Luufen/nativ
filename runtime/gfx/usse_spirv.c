@@ -895,6 +895,8 @@ static uint32_t sop2_cop(Spv *s, int cop, uint32_t x, uint32_t y) {
 static uint32_t sop2_pack(Spv *s, uint32_t v) {
 	return f_to_u(s, fop2(s, SpvOpFAdd, fop2(s, SpvOpFMul, fclamp(s, v, 0.0f, 1.0f), c_float(s, 255.0f)), c_float(s, 0.5f)));
 }
+static uint32_t sop_read_word(Gen *g, const UOperand *o, int off, int *ok);   /* SOP2/SOP2M/SOP3's operands as packed words (below) */
+static void sop_write_word(Gen *g, const UOperand *o, int off, uint32_t v, int *ok);
 static void emit_sop2(Gen *g, const UOp *op, int *ok) {
 	Spv *s = &g->s;
 	static const int unit[4] = {1, 1, 1, 1};
@@ -902,7 +904,7 @@ static void emit_sop2(Gen *g, const UOp *op, int *ok) {
 		int off1 = slot_off(g, op->repmode, op->s1.bank, r, unit, 1, ok);
 		int off2 = slot_off(g, op->repmode, op->s2.bank, r, unit, 2, ok);
 		int offd = slot_off(g, op->repmode, op->dst.bank, r, unit, 3, ok);
-		uint32_t w1 = read_word(g, &op->s1, off1, ok), w2 = read_word(g, &op->s2, off2, ok);   /* read_i32(.., 0): byte 0, src1_mod's raw negate included */
+		uint32_t w1 = sop_read_word(g, &op->s1, off1, ok), w2 = sop_read_word(g, &op->s2, off2, ok);   /* the packed word, as usse.c's sop_read_word (Tzeentchnet 1a62c28) */
 		if (!*ok) return;
 		uint32_t c1[3], c2[3], a1, a2;
 		for (int k = 0; k < 3; k++) {
@@ -934,7 +936,7 @@ static void emit_sop2(Gen *g, const UOp *op, int *ok) {
 			uint32_t v = sop2_cop(s, op->sub2, fop2(s, SpvOpFMul, f1, a1), fop2(s, SpvOpFMul, f2, a2));
 			out = uop2(s, SpvOpBitwiseOr, out, uop2(s, SpvOpShiftLeftLogical, sop2_pack(s, v), c_uint(s, 24)));
 		}
-		write_word(g, &op->dst, offd, out, ok);   /* byte 0 only: write_raw_comp's lane-0 insert, bytes 1-3 preserved */
+		sop_write_word(g, &op->dst, offd, out, ok);   /* the whole packed word */
 	}
 }
 /* VMOV: raw lanes, as usse.c's exec_vmov -- sub==0 a plain move, otherwise a conditional select
@@ -1029,6 +1031,14 @@ static void imad_offsets(Gen *g, const UOp *op, int r, int off[4], int *ok) {
  * I32MAD's S32 operands, lane 0 for I16MAD's U16 (I8MAD reads its packed words as TY_U32: emit_i8mad) */
 static uint32_t read_word(Gen *g, const UOperand *o, int off, int *ok) { return read_raw_comp(g, o, off, 0, ok); }
 static void write_word(Gen *g, const UOperand *o, int off, uint32_t v, int *ok) { write_raw_comp(g, o, off, 0, v, ok); }
+static uint32_t sop_read_word(Gen *g, const UOperand *o, int off, int *ok) {
+	UOperand w = *o; w.type = TY_U32; w.negabs = 0;
+	return read_word(g, &w, off, ok);
+}
+static void sop_write_word(Gen *g, const UOperand *o, int off, uint32_t v, int *ok) {
+	UOperand w = *o; w.type = TY_U32;
+	write_word(g, &w, off, v, ok);
+}
 static void emit_i8mad(Gen *g, const UOp *op, int *ok) {
 	Spv *s = &g->s;
 	for (int r = 0; r < op->reps; r++) {
@@ -1086,7 +1096,7 @@ static uint32_t sop_pack(Spv *s, const uint32_t v[4]) {   /* usse.c u8_pack4: cl
 /* emit_sop2: the earlier definition above (local SOP2 translation, identical arithmetic) serves both; the fork's copy was dropped in the merge */
 static void emit_sop2m(Gen *g, const UOp *op, int *ok) {
 	Spv *s = &g->s;
-	uint32_t w1 = read_word(g, &op->s1, 0, ok), w2 = read_word(g, &op->s2, 0, ok), wd = read_word(g, &op->dst, 0, ok);
+	uint32_t w1 = sop_read_word(g, &op->s1, 0, ok), w2 = sop_read_word(g, &op->s2, 0, ok), wd = sop_read_word(g, &op->dst, 0, ok);
 	if (!*ok) return;
 	uint32_t a[4], b[4], old[4]; sop_unpack(s, w1, a); sop_unpack(s, w2, b); sop_unpack(s, wd, old);
 	int sel1 = op->args[0] & 0xFF, mod1 = op->args[0] & 0x100, sel2 = op->args[1] & 0xFF, mod2 = op->args[1] & 0x100;
@@ -1101,11 +1111,11 @@ static void emit_sop2m(Gen *g, const UOp *op, int *ok) {
 	for (int k = 0; k < 3; k++) res[k] = sop_cop(s, op->sub, t1[k], t2[k]);
 	res[3] = sop_cop(s, op->sub2, t1[3], t2[3]);
 	for (int k = 0; k < 4; k++) if (!(op->mask & (1 << k))) res[k] = old[k];
-	write_word(g, &op->dst, 0, sop_pack(s, res), ok);
+	sop_write_word(g, &op->dst, 0, sop_pack(s, res), ok);
 }
 static void emit_sop3(Gen *g, const UOp *op, int *ok) {
 	Spv *s = &g->s;
-	uint32_t w0 = read_word(g, &op->s0, 0, ok), w1 = read_word(g, &op->s1, 0, ok), w2 = read_word(g, &op->s2, 0, ok);
+	uint32_t w0 = sop_read_word(g, &op->s0, 0, ok), w1 = sop_read_word(g, &op->s1, 0, ok), w2 = sop_read_word(g, &op->s2, 0, ok);
 	if (!*ok) return;
 	uint32_t z[4], a[4], b[4]; sop_unpack(s, w0, z); sop_unpack(s, w1, a); sop_unpack(s, w2, b);
 	int csel1 = op->args[0] & 0xFF, cmod1 = op->args[0] & 0x100, csel2 = op->args[1] & 0xFF, cmod2 = op->args[1] & 0x100;
@@ -1124,7 +1134,7 @@ static void emit_sop3(Gen *g, const UOp *op, int *ok) {
 	if (amod1) af1 = sop_one_minus(s, af1);
 	if (cmod2) af2 = sop_one_minus(s, af2);
 	out[3] = sop_cop(s, op->sub2, fop2(s, SpvOpFMul, af1, a[3]), fop2(s, SpvOpFMul, af2, b[3]));
-	write_word(g, &op->dst, 0, sop_pack(s, out), ok);
+	sop_write_word(g, &op->dst, 0, sop_pack(s, out), ok);
 }
 static void emit_i16mad(Gen *g, const UOp *op, int *ok) {
 	Spv *s = &g->s;
@@ -1189,7 +1199,8 @@ void usse_spirv_key(const UsseProgram *prog, const UsseFragLayout *fl, const uin
 	if (fl) for (int i = 0; i < fl->niters; i++) if (fl->iters[i].is_tex && fl->iters[i].tex_unit >= 0 && fl->iters[i].tex_unit < 16) used |= 1u << fl->iters[i].tex_unit;
 	if (cube_mask) *cube_mask &= used;
 	if (snap_mask) *snap_mask &= used;
-	if (color_kind && *color_kind >= 0) *color_kind = fl && (fl->color_type == TY_U32 || fl->color_type == TY_S32) && (*color_kind == 1 || *color_kind == 2) ? *color_kind : 0;   /* (emit_frag_epilogue: raw words by kind 1, 2, else bytes) */
+	if (color_kind && *color_kind >= 0) *color_kind = fl && (fl->color_type == TY_U32 || fl->color_type == TY_S32)
+		&& (*color_kind == 1 || *color_kind == 2 || *color_kind == USSE_COLOR_KIND_F16_RAW) ? *color_kind : 0;   /* (emit_frag_epilogue: raw words by target storage) */
 }
 uint32_t usse_spirv_predict_cube(const UsseProgram *prog, const UsseFragLayout *fl, const uint32_t sa_tex_unit[256]) {
 	uint32_t m = 0; int n = 0; const UOp *code = usse_program_code(prog, 0, &n);
@@ -1897,6 +1908,7 @@ static void emit_frag_epilogue(Gen *g, int *ok) {
 		for (int c = 0; c < 4; c++) {
 			if ((g->color_kind & 0xff) == 2) comp[c] = result1(s, &s->func, SpvOpBitcast, t_float(s), w[c]);                 /* RGBA32F: a word a channel */
 			else if ((g->color_kind & 0xff) == 1) comp[c] = half_to_float_spv(s, extract_lane_spv(s, w[c / 2], TY_F16, c & 1));   /* RGBA16F: halves */
+			else if ((g->color_kind & 0xff) == USSE_COLOR_KIND_F16_RAW) comp[c] = fop2(s, SpvOpFDiv, result1(s, &s->func, SpvOpConvertUToF, t_float(s), extract_lane_spv(s, w[c / 2], TY_U16, c & 1)), c_float(s, 65535.0f));   /* RGBA16_UNORM: halves as exact integers */
 			else comp[c] = fop2(s, SpvOpFDiv, result1(s, &s->func, SpvOpConvertUToF, t_float(s), extract_lane_spv(s, w[0], TY_U8, c)), c_float(s, 255.0f));   /* RGBA8: bytes */
 		}
 		if (!*ok) return;
@@ -2414,9 +2426,9 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 	}
 
 	/* walk the program. Predicated forward branches ("(!p0) BR +k": skip the next k-1 instructions
-	 * unless p0) become a structured if around the skipped range; ranges nest, each closed when the
-	 * walk reaches its target. Backward branches, unconditional ones and link-saving calls aren't
-	 * translated (usse.c runs them; none of the three games' programs seen so far use them). */
+	 * unless p0) become structured selections. The common if/else form ends that fall-through range
+	 * with an unconditional forward branch over the other arm; both labels and the merge are emitted
+	 * here. Ranges nest. Backward branches and link-saving calls aren't translated. */
 	/* filtered shadows (usse_spirv_set_pcf): the walk and the epilogue below run once per tap, each from the
 	 * register file as the prologue left it and with the shadow map's SMPs moved by its grid step, and the
 	 * colours they write are averaged. The game's own compare and everything after it run per tap, so the
