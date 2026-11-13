@@ -574,6 +574,11 @@ static void page_game(void) {
 		ui::row(ui_tr("game.chr"), ui_tr("game.chr_help"));
 		ImGui::SetNextItemWidth(-FLT_MIN); if (ui::slider_float("##chr", &P.chr, 1.0f, 8.0f, "%.1f×")) set_chr(P.chr);
 	}
+	if (game_option("skip_mission_intros")) {
+		ui::row("Skip mission introductions", "Skips chapter briefing videos whenever the game tries to replay them, including after Continue. Other cinematics and weapon tutorials still play.");
+		bool on = settings_int("skip_mission_intros", 0) != 0;
+		if (ui::toggle("skip_mission_intros", &on)) { settings_set_int("skip_mission_intros", on ? 1 : 0); settings_save(); }
+	}
 	if (display_pstv_looked()) {   /* (display.c's PS TV mode: a game with a PS TV layout of its own) */
 		ui::row(ui_tr("game.layout"), ui_tr("game.layout_help"), note_int("controller_layout", settings_int("controller_layout", 0), ui_tr("mark.after_restart")));
 		{	char t0[48], t1[48], t2[48];
