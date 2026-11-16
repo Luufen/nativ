@@ -62,6 +62,19 @@ int main(void) {
 		CHECK(fmt_last(old, now) == "2026-10-30");
 		CHECK(fmt_last(0, now) == "");
 	}
-	printf("library_info: %d checks, %d failed\n", checks, fails);
+	/* game.json fields and versions (UPD-UI) */
+	{
+		const std::string j = "{\n  \"title_id\": \"PCSF00243\",\n  \"title\": \"Killzone\\u2122 \\\"Merc\\\"\",\n  \"version\": \"01.12\",\n  \"selfs_decrypted\": 3\n}";
+		CHECK(json_string(j, "version") == "01.12");
+		CHECK(json_string(j, "title_id") == "PCSF00243");
+		CHECK(json_string(j, "title") == "Killzone\xe2\x84\xa2 \"Merc\"");   /* (\u2122 as UTF-8) */
+		CHECK(json_string(j, "selfs_decrypted") == "");
+		CHECK(json_string(j, "missing") == "");
+		CHECK(json_string("", "version") == "");
+		CHECK(vita_version("01.12") == "1.12");
+		CHECK(vita_version("1.00") == "1.00");
+		CHECK(vita_version("10.01") == "10.01");
+		CHECK(vita_version("") == "");
+	}	printf("library_info: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 }

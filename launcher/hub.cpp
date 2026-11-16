@@ -17,7 +17,7 @@
  * ATIV_PREFS=<dir>: the launcher's own files and the shared settings there instead of the user's app folder (a test).
  * ATIV_DUMP=<dir>: the library (games, firmware, licences, builds, saves) there instead of the usual one, library_dir (a
  * fresh library to try setup on; the stages it runs inherit it). ATIV_SHOT=f.ppm (a verification aid, no visible window): renders the hub once into f.ppm and exits;
- * ATIV_SHOT_UI=library|setup:<0-4>|add|settings:<0-2>|game:<title>|more:<title>|sac|sac:again picks what is on screen, ATIV_SHOT_SIZE=WxH the size (1280x800),
+ * ATIV_SHOT_UI=library|setup:<0-4>|add|settings:<0-2>|game:<title>|more:<title>|content:<title>|sac|sac:again picks what is on screen, ATIV_SHOT_SIZE=WxH the size (1280x800),
  * ATIV_SHOT_SCAN=<rows> a folder search's results (vitarecomp scan's output) in the Add dialog,
  * ATIV_SHOT_LIBSCAN=<rows> the library folders' search (vitarecomp folders scan's output: "Found in" on the cards);
  * the library folders themselves are <prefs>/library_folders.tsv (ATIV_PREFS=<dir> for a test's).
@@ -520,6 +520,9 @@ struct Game {
 	std::string region;       /* the pack's REGION: the release it plays (US) */
 	bool pack = false, imported = false, built = false;
 	std::string missing;      /* a folder its copy reads in place (vitarecomp add --in-place: app0.links) that isn't there: its drive unplugged */
+	std::string game_version, update_version;   /* (UPD-UI) the copy's game and its update as added (app0 / patch0 game.json: "1.00", "1.12"; "": none) */
+	struct Addon { std::string name, title, version; };
+	std::vector<Addon> addons;   /* (DLC-01) the add-ons added (dump/decrypted/<title>/addcont/<name>), by name */
 };
 static std::string recommended_version(const Game &g) {
 	for (auto &v : g.versions) if (v.second == "recommended") return v.first;
@@ -581,6 +584,7 @@ static bool title_like(const char *s) {   /* PCSA00029: four letters, five digit
 	return true;
 }
 static void art_paths(Game &g);
+static std::string read_file(const std::string &path);
 static void count_licences(void);
 static void lib_load(void);
 static std::map<std::string, std::string> g_other_of;   /* a pack's OTHER_TITLES: another release's id -> the pack that plays it */
@@ -639,6 +643,21 @@ static void library_scan(void) {
 				while (g.missing.empty() && fgets(line, sizeof line, f)) { std::string t = line; while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back(); if (!t.empty() && !exists(t)) g.missing = t; }
 				fclose(f);
 			}
+		g.game_version = vita_version(json_string(read_file(w + "/app0/game.json"), "version"));
+		g.update_version = exists(w + "/patch0") ? vita_version(json_string(read_file(w + "/patch0/game.json"), "version")) : "";
+		if (exists(w + "/patch0") && g.update_version.empty()) g.update_version = "?";
+		if (DIR *ad = opendir((w + "/addcont").c_str())) {
+			while (dirent *e = readdir(ad)) {
+				const std::string n = e->d_name, d = w + "/addcont/" + n;
+				if (n[0] == '.' || !exists(d + "/sce_sys")) continue;
+				const std::string j = read_file(d + "/game.json");
+				Game::Addon a; a.name = n; a.title = json_string(j, "title"); a.version = vita_version(json_string(j, "version"));
+				if (a.title.empty() || !ui::text_drawable(a.title.c_str())) a.title = n;
+				g.addons.push_back(a);
+			}
+			closedir(ad);
+			std::sort(g.addons.begin(), g.addons.end(), [](const Game::Addon &a, const Game::Addon &b) { return a.name < b.name; });
+		}
 		if (g.imported) art_paths(g);
 		if (g.name.empty() && g.imported) g.name = sfo_title_file(w + "/recomp/fs/app0/sce_sys/param.sfo");   /* (no game pack: the game's own title, not its id) */
 		if (g.name.empty() || !ui::text_drawable(g.name.c_str())) g.name = g.id;   /* (UI-05: a title no face here can draw -- no CJK font installed -- reads as its id, not as boxes) */
@@ -696,7 +715,7 @@ static void pick_file(SDL_Window *w, std::string *target, const SDL_DialogFileFi
 static void pick_folder(SDL_Window *w, std::string *target) { if (use_in_app_browser()) { browse_open(target, BROWSE_FOLDER); return; } if (g_shot_mode) { g_shot_done.push_back("pick a folder"); return; } g_pick_target = target; SDL_ShowOpenFolderDialog(picked, nullptr, w, nullptr, false); }
 /* what each file dialog shows first. A game file is a PKG (vitadecrypt.game reads a file only by a PKG's magic; zip/vpk
  * are not read); a licence is a .rif or a work.bin; the firmware is Sony's .PUP. All files last, for a renamed one */
-static const SDL_DialogFileFilter k_pick_pkg[] = {{"PS Vita game or update (*.pkg)", "pkg"}, {"All files (*.*)", "*"}};
+static const SDL_DialogFileFilter k_pick_pkg[] = {{"PS Vita game, update or add-on (*.pkg)", "pkg"}, {"All files (*.*)", "*"}};
 static const SDL_DialogFileFilter k_pick_licence[] = {{"Licence file (*.rif, work.bin)", "rif;bin"}, {"All files (*.*)", "*"}};
 static const SDL_DialogFileFilter k_pick_pup[] = {{"PS Vita system update (*.PUP)", "pup"}, {"All files (*.*)", "*"}};
 static void pick_pkg(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_pkg, 2, BROWSE_PKG); }
@@ -1226,6 +1245,8 @@ static void scan_parse(const std::string &path, std::vector<Found> &out) {   /* 
 		if (x.kind == "game" || x.kind == "update") {
 			bool dup = false; for (const Found &y : out) dup |= y.pick && y.kind == x.kind && y.id == x.id;
 			x.pick = !dup && playable_status(x.status);   /* (one still needing its licence is ticked, its field showing; it's added once it has one) */
+		} else if (x.kind == "addon") {   /* (DLC-01) one not added yet, with its licence at hand */
+			x.pick = x.status == "addon" && (x.licence == "yes" || !x.licence_file.empty() || !kept_licence(x.content_id).empty());
 		} else if (x.kind == "firmware" && x.status == "firmware" && !g_firmware) {
 			for (Found &y : out) if (y.kind == "firmware") y.pick = false;   /* (rows come sorted by version) */
 			x.pick = true;
@@ -1238,7 +1259,7 @@ static void scan_load(const std::string &path) { scan_parse(path, g_found); g_fo
 static bool found_ready(const Found &x, const std::vector<Found> &rows = g_found) {   /* it has what adding it needs */
 	if (x.kind == "firmware") return true;
 	if (!kept_licence(x.content_id).empty()) return true;
-	if (x.licence == "rif" || (x.kind == "game" && x.licence == "no")) return !x.licence_file.empty();
+	if (x.licence == "rif" || ((x.kind == "game" || x.kind == "addon") && x.licence == "no")) return !x.licence_file.empty();   /* (an add-on: its own licence, DLC-01) */
 	if (x.kind == "update" && x.licence == "no") {   /* it decrypts with its game's licence: the game is being added with one */
 		for (const Found &y : rows) if (y.pick && y.kind == "game" && y.id == x.id && found_ready(y, rows)) return true;
 		return false;
@@ -1255,13 +1276,15 @@ static std::vector<Step> found_steps(int *n, std::vector<std::string> *titles, c
 	for (const Found &x : rows)
 		if (only.empty() && x.pick && x.kind == "firmware") { steps.push_back(step("Installing the firmware " + x.version, vitarecomp({"firmware", x.path}), ++group)); ++*n; break; }
 	std::vector<std::string> ids;
-	for (const Found &x : rows) if (x.pick && (x.kind == "game" || x.kind == "update") && (only.empty() || x.id == only) && std::find(ids.begin(), ids.end(), x.id) == ids.end()) ids.push_back(x.id);
+	for (const Found &x : rows) if (x.pick && (x.kind == "game" || x.kind == "update" || x.kind == "addon") && (only.empty() || x.id == only) && std::find(ids.begin(), ids.end(), x.id) == ids.end()) ids.push_back(x.id);
 	if (titles) *titles = ids;
 	for (const std::string &id : ids) {
 		std::vector<const Found *> items;
 		for (const char *k : {"game", "update"})
 			for (const Found &x : rows) if (x.pick && x.id == id && x.kind == k && found_ready(x, rows)) { items.push_back(&x); break; }
-		if (items.empty()) continue;
+		std::vector<const Found *> addons;   /* (DLC-01) its add-ons: each added with its own licence, after the game is built (nothing of theirs is built) */
+		for (const Found &x : rows) if (x.pick && x.id == id && x.kind == "addon" && found_ready(x, rows)) addons.push_back(&x);
+		if (items.empty() && addons.empty()) continue;
 		bool pack = false;
 		for (const Found &x : rows) pack |= x.id == id && x.status != "nopack";
 		++group;
@@ -1274,8 +1297,16 @@ static std::vector<Step> found_steps(int *n, std::vector<std::string> *titles, c
 			steps.push_back(step(x.kind == "update" ? "Adding its update " + x.version : "Adding " + x.name + " " + x.version, argv, group));
 			++*n;
 		}
-		steps.push_back(step("Checking its version", vitarecomp({"import", id}), group));   /* (the game with its update layered over it) */
-		if (pack) build_steps(steps, id, group);
+		if (!items.empty()) {
+			steps.push_back(step("Checking its version", vitarecomp({"import", id}), group));   /* (the game with its update layered over it) */
+			if (pack) build_steps(steps, id, group);
+		}
+		for (const Found *xp : addons) {
+			std::vector<std::string> argv = vitarecomp({"add", xp->path});
+			if (!xp->licence_file.empty()) argv.insert(argv.end(), {"--license", xp->licence_file});
+			steps.push_back(step("Adding the add-on " + xp->name, argv, group));
+			++*n;
+		}
 	}
 	return steps;
 }
@@ -1285,7 +1316,7 @@ static void found_status(const Found &x) {   /* what its game pack says of it, a
 		{"recommended", "Recommended version", 0}, {"supported", "Supported version", 0}, {"check", "Checked against its game pack when added", 2},
 		{"unsupported", "This version isn't supported yet", 1}, {"nopack", "No game pack yet: experimental", 1},
 		{"otherregion", "This region's release isn't supported yet", 1},
-		{"added", "Already in your library", 2}, {"licensed", "Nothing to add: the game gets its add-ons", 2},
+		{"added", "Already in your library", 2}, {"addon", "An add-on: added with its own licence, the game has it from its next start", 0},
 		{"installed", "Already installed", 2}, {"firmware", "Not installed yet", 0}};
 	for (const S &e : st) if (x.status == e.key) {
 		ui::dot(e.tone == 0 ? ui::ready : e.tone == 1 ? ui::warn : ui::border);
@@ -1304,10 +1335,10 @@ static void found_list(void) {
 		Found &x = g_found[i];
 		ImGui::PushID((int)i);
 		if (i) ImGui::Separator();
-		bool can = x.kind == "game" || x.kind == "update" || (x.kind == "firmware" && x.status == "firmware");
+		bool can = x.kind == "game" || x.kind == "update" || (x.kind == "addon" && x.status == "addon") || (x.kind == "firmware" && x.status == "firmware");
 		ImGui::BeginDisabled(!can || g_task.running);
 		if (ImGui::Checkbox("##pick", &x.pick) && x.pick)   /* one copy of a game (or of its update) at a time */
-			for (Found &y : g_found) if (&y != &x && y.kind == x.kind && y.id == x.id && x.kind != "firmware") y.pick = false;
+			for (Found &y : g_found) if (&y != &x && y.kind == x.kind && y.id == x.id && x.kind != "firmware" && x.kind != "addon") y.pick = false;
 		ImGui::EndDisabled();
 		ImGui::SameLine();
 		ImGui::BeginGroup();
@@ -1315,7 +1346,7 @@ static void found_list(void) {
 		ImGui::TextUnformatted(x.name.c_str()); ImGui::SameLine();
 		ImGui::TextDisabled("%s%s%s%s", kind, x.version.empty() ? "" : " ", x.version.c_str(), x.form == "pkg" ? " (PKG)" : "");
 		found_status(x);
-		if (x.pick && (x.licence == "rif" || (x.kind == "game" && x.licence == "no")) && kept_licence(x.content_id).empty()) {
+		if (x.pick && (x.licence == "rif" || ((x.kind == "game" || x.kind == "addon") && x.licence == "no")) && kept_licence(x.content_id).empty()) {
 			ui::dot(ui::warn); ImGui::TextDisabled("Needs its licence file (.rif or work.bin).");
 			licence_help_link();
 			if (path_row("##licfile", x.licence_file, "Its licence file (.rif or work.bin)")) pick_licence(nullptr, &x.licence_file);
@@ -1324,7 +1355,7 @@ static void found_list(void) {
 		}
 		ImGui::PushFont(nullptr, em * 0.85f); ImGui::PushStyleColor(ImGuiCol_Text, ui::muted);
 		ImGui::TextUnformatted(x.path.c_str());
-		if (!kept_licence(x.content_id).empty() && (x.kind == "game" || x.kind == "update")) ImGui::TextUnformatted("Licence: kept");
+		if (!kept_licence(x.content_id).empty() && (x.kind == "game" || x.kind == "update" || x.kind == "addon")) ImGui::TextUnformatted("Licence: kept");
 		else if (x.licence == "file") ImGui::Text("Licence: %s", x.licence_file.c_str());
 		ImGui::PopStyleColor(); ImGui::PopFont();
 		ImGui::EndGroup();
@@ -1387,7 +1418,7 @@ static std::string vita3k_default_dir(void) {   /* Vita3K's data folder at its u
 }
 static bool g_search_keep = true;   /* the search form's "Keep this folder": searched again on each start */
 static bool search_form(SDL_Window *win) {   /* a folder searched for games, updates and the firmware file; true when adding started */
-	ui::muted_wrapped("A folder to look through, every subfolder too: a copy of your Vita's ux0: (its app, patch and addcont folders) or a downloads folder. Games, their updates and the firmware file are found and checked against the game packs, which play the games' US releases at the versions listed.");
+	ui::muted_wrapped("A folder to look through, every subfolder too: a copy of your Vita's ux0: (its app, patch and addcont folders) or a downloads folder. Games, their updates, add-ons and the firmware file are found and checked against the game packs, which play the games' US releases at the versions listed.");
 	ImGui::Spacing();
 	if (path_row("##scanpath", g_scan_path, "Choose a folder to search")) pick_folder(win, &g_scan_path);
 	const bool searching = g_task.running && g_task.kind == "scan";
@@ -1413,7 +1444,7 @@ static bool search_form(SDL_Window *win) {   /* a folder searched for games, upd
 	std::string label = n ? "Add " + std::to_string(n) + (n == 1 ? " item" : " items") : "Add";
 	bool started = ui::primary_button(label.c_str());
 	ImGui::EndDisabled();
-	int waiting = 0; for (const Found &x : g_found) waiting += x.pick && (x.kind == "game" || x.kind == "update") && !found_ready(x);
+	int waiting = 0; for (const Found &x : g_found) waiting += x.pick && (x.kind == "game" || x.kind == "update" || x.kind == "addon") && !found_ready(x);
 	if (waiting) { ImGui::SameLine(); ImGui::TextDisabled("%d waiting for a licence", waiting); }
 	if (started) {
 		task_start(n == 1 ? "Adding from the folder" : "Adding " + std::to_string(n) + " items", "add", "", steps);
@@ -1429,8 +1460,8 @@ static bool add_form(SDL_Window *win) {   /* a player's own copy -> decrypted, i
 	ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 0.15f));
 	if (g_add_kind == 0) return search_form(win);
 	const bool pkg_kind = g_add_kind == 1;
-	ui::muted_wrapped(pkg_kind ? "The .pkg of a game you own, with its licence file: the .rif from your Vita. Or its update's PKG, once the game is added (it uses the game's licence)."
-	                           : "A game folder copied from your Vita (ux0:app/<title>: it carries its licence, sce_sys/package/work.bin), or one already decrypted; or its update (ux0:patch/<title>), once the game is added.");
+	ui::muted_wrapped(pkg_kind ? "The .pkg of a game you own, with its licence file: the .rif from your Vita. Or its update's PKG, once the game is added (it uses the game's licence), or an add-on's PKG with its own licence."
+	                           : "A game folder copied from your Vita (ux0:app/<title>: it carries its licence, sce_sys/package/work.bin), or one already decrypted; or its update (ux0:patch/<title>), once the game is added; or an add-on (ux0:addcont/<title>/<add-on>).");
 	licence_help_link();
 	ImGui::Spacing();
 	if (path_row("##addpath", g_add_path, pkg_kind ? "Choose the .pkg file" : "Choose the game folder")) {
@@ -2786,6 +2817,7 @@ static std::string id_line_text(const Game &g, std::string *update) {   /* the i
 	if (!g.pack) line += "  -  experimental (no game pack)";
 	else if (g.imported && !g.version.empty() && g.version != "-") line += "  ·  " + (g.region.empty() ? "" : g.region + " ") + g.version;
 	else if (!g.imported && !vs.empty()) line += "  ·  plays " + (g.region.empty() ? "" : g.region + " ") + vs;
+	if (g.imported && !g.addons.empty()) line += "  ·  " + std::to_string(g.addons.size()) + (g.addons.size() == 1 ? " add-on" : " add-ons");   /* (DLC-01) */
 	{ std::lock_guard<std::mutex> lk(g_steam.m); if (g_steam.in.count(g.id)) line += "  ·  In Steam"; }
 	if (update) *update = g.imported && !rec.empty() && g.version != rec ? rec : "";
 	return line;
@@ -2802,7 +2834,7 @@ static void game_id_line(const Game &g) {   /* the title id and the version: thi
 		ImGui::SameLine();   /* (one unwrapped line of text, not a chip: every card's lines keep one height) */
 		/* ("Update 1.12" beside the version read as the copy's own: a 1.00 copy was taken for 1.12) */
 		info_text("##update", ui::warn, "Update " + rec + " available",
-		          (g.update_note.empty() ? "Version " + rec + " is recommended" : g.update_note) + " (this copy is " + g.version + ").\nAdd it with + Add game: its update folder (ux0:patch/" + g.id + ") or PKG,\nor search the folder you copied from your Vita.");
+		          (g.update_note.empty() ? "Version " + rec + " is recommended" : g.update_note) + " (this copy is " + g.version + ").\nAdd it on the game's page (...), Updates & add-ons: its update folder (ux0:patch/" + g.id + ") or PKG,\nor search the folder you copied from your Vita.");
 	}
 }
 static std::string g_game_page;   /* (UI-01i) the game whose page is open ("": none; ATIV_SHOT_UI=more:<title> opens it in a screenshot run) */
@@ -3219,6 +3251,8 @@ static void export_modal(void) {
 	if (close) { g_export_open = false; ImGui::CloseCurrentPopup(); }
 	ImGui::EndPopup();
 }
+static std::string g_content_game;   /* (UPD-UI, DLC-01) the game whose "Updates & add-ons" is open; ATIV_SHOT_UI=content:<title> */
+static std::string g_upd_path, g_addon_path, g_addon_lic;
 static void game_page_modal(void) {
 	if (g_game_page.empty()) return;
 	const Game *gp = nullptr; for (const Game &x : g_games) if (x.id == g_game_page) gp = &x;
@@ -3283,6 +3317,11 @@ static void game_page_modal(void) {
 		if (action("Export…", ok ? "A copy that runs this game on your other devices: a folder for another Windows PC, or one file for a Steam Deck or another Linux PC. Private, for your own devices."
 		                                        : "Build the game first: a game can be exported once it is ready to play.", false, ok && !busy)) { export_open(g); close = true; }
 	}
+	if (g.imported) {   /* (UPD-UI, DLC-01) */
+		std::string expl = "Its version: " + (g.update_version.empty() ? "the game " + (g.game_version.empty() ? g.version : g.game_version) + ", no update" : "update " + g.update_version + " added")
+		                 + ". Add-ons: " + (g.addons.empty() ? "none added" : std::to_string(g.addons.size()) + " added") + ". Add or remove an update or add-ons you own.";
+		if (action("Updates & add-ons…", expl.c_str(), false, true)) { g_content_game = g.id; close = true; }
+	}
 	if (g.imported && action("Game settings", "This game's own options (field of view, view distance, ...) and the values it keeps apart from the shared Settings.", false, true)) {
 		make_dir(g_dump + "/decrypted/" + g.id + "/recomp"); g_game_settings = g.id; close = true;
 	}
@@ -3296,6 +3335,130 @@ static void game_page_modal(void) {
 	if (ImGui::Button("Back") || dialog_back()) close = true;
 	dialog_hints();
 	if (close) { g_game_page.clear(); ImGui::CloseCurrentPopup(); }
+	ImGui::EndPopup();
+}
+
+/* ---- a game's updates and add-ons (UPD-UI, DLC-01; the owner, 2026-11-16: "Überlege wie wir in das UI Updates und DLCs
+ * einbinden können" -> "implementiere"): its version as added -- the game, its update (vitarecomp add of the update
+ * builds the game again with it; remove-update builds it without) -- and its add-ons, each the player's own with its own
+ * licence (vitarecomp add of the add-on: decrypted into the library, the game has it from its next start, nothing is
+ * built; remove-addon takes it out). What the library folders found for the game and isn't added yet is offered too.
+ * The runtime counts only the added add-ons as installed (runtime/core/addcont.h). */
+static void content_task(const Game &g, const std::string &name, const std::string &say, std::vector<std::string> argv) {
+	task_start(name, "add", g.id, {step(say, std::move(argv))});
+}
+static bool found_is_game(const Found &x, const Game &g) {   /* a library folders' find of this card's game (or a release its pack plays) */
+	auto o = g_other_of.find(x.id);
+	return x.id == g.id || (o != g_other_of.end() && o->second == g.id);
+}
+static void content_modal(void) {
+	if (g_content_game.empty()) return;
+	const Game *gp = nullptr; for (const Game &x : g_games) if (x.id == g_content_game) gp = &x;
+	if (!gp) { g_content_game.clear(); return; }
+	const Game &g = *gp; const bool busy = g_task.running;
+	const ImGuiViewport *vp = ImGui::GetMainViewport(); const float em = ImGui::GetFontSize();
+	if (!ImGui::IsPopupOpen("##content")) ImGui::OpenPopup("##content");
+	ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x < 48 * em ? vp->WorkSize.x * 0.94f : 44 * em, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(1.6f * em, 1.3f * em)); ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	if (!ImGui::BeginPopupModal("##content", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove)) { ImGui::PopStyleVar(2); return; }
+	ImGui::PopStyleVar(2);
+	ImGui::PushTextWrapPos(0); ui::heading("Updates & add-ons", em * 1.4f); ImGui::TextDisabled("%s  ·  %s", g.name.c_str(), g.id.c_str()); ImGui::PopTextWrapPos();
+	bool close = false;
+	dialog_body_begin();
+	ImGui::PushTextWrapPos(0);
+	const bool mine = busy && std::find(g_task.games.begin(), g_task.games.end(), g.id) != g_task.games.end();
+	if (mine) { ui::spinner(ui::accent); ImGui::TextDisabled("%s", task_status().c_str()); }
+
+	/* -- the version */
+	ui::heading("Version", em * 1.15f);
+	const std::string rec = recommended_version(g);
+	ImGui::Text("The game: %s", g.game_version.empty() ? "?" : g.game_version.c_str());
+	if (g.update_version.empty()) ImGui::TextDisabled("No update added.");
+	else ImGui::Text("Its update: %s", g.update_version.c_str());
+	if (!g.version.empty() && g.version != "-") ImGui::TextDisabled("Plays as version %s (what its game pack recognises).", g.version.c_str());
+	if (g.pack && !rec.empty() && g.version != rec) {
+		ui::dot(ui::warn); ImGui::TextWrapped("Version %s is recommended%s%s.", rec.c_str(), g.update_note.empty() ? "" : ": ", g.update_note.c_str());
+	}
+	for (Found &x : g_lib_found) {   /* an update the library folders found that isn't the one added */
+		if (x.kind != "update" || !found_is_game(x, g) || x.status == "added") continue;
+		ImGui::PushID(x.path.c_str());
+		ImGui::BeginDisabled(busy || !found_ready(x, g_lib_found));
+		if (ImGui::Button(("Add update " + vita_version(x.version) + " from " + leaf_name(x.source)).c_str())) {
+			std::vector<std::string> argv = vitarecomp({"add", x.path});
+			if (!x.licence_file.empty()) argv.insert(argv.end(), {"--license", x.licence_file});
+			if (g_prefs["library_in_place"] == "1") argv.push_back("--in-place");
+			content_task(g, "Adding update " + vita_version(x.version) + " to " + g.name, "Decrypting the update, then building the game with it", argv);
+		}
+		ImGui::EndDisabled();
+		ImGui::PopID();
+	}
+	if (path_row("##updpath", g_upd_path, "An update: its PKG, or its folder (ux0:patch/<title>)")) pick_pkg(nullptr, &g_upd_path);
+	ImGui::BeginDisabled(busy || g_upd_path.empty());
+	if (ImGui::Button(g.update_version.empty() ? "Add the update" : "Replace the update")) {
+		content_task(g, "Adding an update to " + g.name, "Decrypting the update, then building the game with it", vitarecomp({"add", g_upd_path}));
+		g_upd_path.clear();
+	}
+	ImGui::EndDisabled();
+	if (!g.update_version.empty()) {
+		same_line_fits(button_w("Remove the update"));
+		ImGui::BeginDisabled(busy);
+		if (ImGui::Button("Remove the update")) content_task(g, "Removing the update of " + g.name, "Building the game without its update", vitarecomp({"remove-update", g.id}));
+		ImGui::EndDisabled();
+	}
+	ui::muted_wrapped("An update decrypts with the game's licence. Adding or removing one builds the game again: a few minutes.");
+	ImGui::Dummy(ImVec2(0, em * 0.5f));
+
+	/* -- the add-ons */
+	ui::heading("Add-ons", em * 1.15f);
+	if (g.addons.empty()) ImGui::TextDisabled("No add-ons added.");
+	for (const Game::Addon &a : g.addons) {
+		ImGui::PushID(a.name.c_str());
+		ui::dot(ui::ready); ImGui::TextUnformatted(a.title.c_str());
+		ImGui::SameLine(); ImGui::TextDisabled("%s%s%s", a.name.c_str(), a.version.empty() ? "" : "  ·  ", a.version.c_str());
+		same_line_fits(button_w("Remove"));
+		ImGui::BeginDisabled(busy);
+		if (small_button("Remove")) content_task(g, "Removing " + a.title + " from " + g.name, "Removing the add-on", vitarecomp({"remove-addon", g.id, a.name}));
+		ImGui::EndDisabled();
+		ImGui::PopID();
+	}
+	for (Found &x : g_lib_found) {   /* add-ons the library folders found for it, not added yet */
+		if (x.kind != "addon" || !found_is_game(x, g) || x.status == "added") continue;
+		ImGui::PushID(x.path.c_str());
+		ui::dot(ui::accent); ImGui::TextUnformatted(x.name.c_str()); ImGui::SameLine(); ImGui::TextDisabled("found in %s", leaf_name(x.source).c_str());
+		const bool lic = x.licence == "yes" || !x.licence_file.empty() || !kept_licence(x.content_id).empty();
+		if (!lic) {
+			ui::dot(ui::warn); ImGui::TextDisabled("Needs its own licence file (.rif or work.bin).");
+			if (path_row("##lic", x.licence_file, "Its licence file (.rif or work.bin)")) pick_licence(nullptr, &x.licence_file);
+		}
+		ImGui::BeginDisabled(busy || !lic);
+		if (small_button("Add")) {
+			std::vector<std::string> argv = vitarecomp({"add", x.path});
+			if (!x.licence_file.empty()) argv.insert(argv.end(), {"--license", x.licence_file});
+			content_task(g, "Adding " + x.name + " to " + g.name, "Decrypting the add-on with its licence", argv);
+		}
+		ImGui::EndDisabled();
+		ImGui::PopID();
+	}
+	ImGui::Dummy(ImVec2(0, em * 0.2f));
+	if (path_row("##addonpath", g_addon_path, "An add-on: its PKG, or its folder (ux0:addcont/<title>/<add-on>)")) pick_pkg(nullptr, &g_addon_path);
+	if (path_row("##addonlic", g_addon_lic, "Its licence file (.rif or work.bin), unless it's kept or in the folder")) pick_licence(nullptr, &g_addon_lic);
+	ImGui::BeginDisabled(busy || g_addon_path.empty());
+	if (ImGui::Button("Add the add-on")) {
+		std::vector<std::string> argv = vitarecomp({"add", g_addon_path});
+		if (!g_addon_lic.empty()) argv.insert(argv.end(), {"--license", g_addon_lic});
+		content_task(g, "Adding an add-on to " + g.name, "Decrypting the add-on with its licence", argv);
+		g_addon_path.clear(); g_addon_lic.clear();
+	}
+	ImGui::EndDisabled();
+	licence_help_link();
+	ui::muted_wrapped("Add-ons you own, each with its own licence. The game has an added one from its next start, nothing is built; one not added isn't there for the game, as on a Vita without it.");
+	ImGui::PopTextWrapPos();
+	dialog_body_end();
+	if (ImGui::Button("Back") || dialog_back()) close = true;
+	dialog_hints();
+	child_dialogs();   /* (Browse..., the keyboard) */
+	if (close) { g_content_game.clear(); g_upd_path.clear(); g_addon_path.clear(); g_addon_lic.clear(); ImGui::CloseCurrentPopup(); }
 	ImGui::EndPopup();
 }
 
@@ -3657,6 +3820,7 @@ static void hub_ui(SDL_Window *win) {
 	settings_modal();
 	game_settings_modal();
 	game_page_modal();
+	content_modal();
 	if (g_browse.top) browser_modal();   /* (one opened with no dialog around it) */
 	if (g_osk.top) osk_modal();
 	{	/* (a press of B this frame that ImGui used to end an edit or close a menu: no dialog takes it next frame either) */
@@ -4121,6 +4285,7 @@ int main(int argc, char **argv) {
 		g_settings_open = ui_sel.rfind("settings", 0) == 0; if (g_settings_open && ui_sel.size() > 9) g_settings_tab = atoi(ui_sel.c_str() + 9);
 		if (ui_sel.rfind("game:", 0) == 0) g_game_settings = ui_sel.substr(5);
 		if (ui_sel.rfind("more:", 0) == 0) g_game_page = ui_sel.substr(5);
+		if (ui_sel.rfind("content:", 0) == 0) g_content_game = ui_sel.substr(8);
 		if (ui_sel.rfind("name:", 0) == 0) g_name_game = ui_sel.substr(5);
 		if (ui_sel == "map:diagram") { g_settings_open = true; g_settings_tab = 1; g_map_type = 0; g_diag_scroll = true; }   /* (UI-02c: the drawing in view) */
 		else if (ui_sel.rfind("map:spot:", 0) == 0) { g_settings_open = true; g_settings_tab = 1; g_map_type = 0; g_spot.open = true; g_spot.spot = atoi(ui_sel.c_str() + 9) % PD_N; }

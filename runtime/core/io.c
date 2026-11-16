@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include "hle.h"
 #include "guestwatch.h"
+#include "addcont.h"   /* (DLC-01) the add-ons the player added */
 
 /* ---- files: a Vita path "dev:rest" is <RECOMP_FS>/dev/rest on the host (app0: is the game's
  * install folder, ux0:data its data); "/dev/rest" (FIOS's own spelling) the same; a relative path
@@ -105,11 +106,13 @@ static int readonly_refused(const char *what, const char *gp, const char *hp) {
 static uint8_t owned[4096];
 uint32_t io_guest_fd(int fd) { if (fd >= 0 && fd < 4096) __atomic_store_n(&owned[fd], 1, __ATOMIC_RELEASE); return (uint32_t)fd + 0x100; }
 /* RECOMP_ADDCONT_MARKERS="<add-on>/<file> ...": files a game opens to tell whether an add-on is owned, and never reads.
- * Every add-on counts as owned (apputil.c h_drm_open); a game that checks one by such a file gets the file, made empty
- * when it's missing. Unit 13's Network Pass: addcont0:UNIT13ONLINEPASS/unlock.dat, opened and closed at once */
+ * For an add-on the player added (addcont.h: its folder in addcont0) a game that checks it by such a file gets the file,
+ * made empty when the add-on's copy lacks it; one not added stays missing, as on the console. Unit 13's Network Pass:
+ * addcont0:UNIT13ONLINEPASS/unlock.dat, opened and closed at once */
 static void addcont_marker(const char *gp, const char *hp) {
 	const char *m = getenv("RECOMP_ADDCONT_MARKERS");
 	if (!m || strncasecmp(gp, "addcont0:", 9)) return;
+	if (!addcont_path_installed(getenv("RECOMP_FS") ? getenv("RECOMP_FS") : "fs", gp)) return;
 	const char *rest = gp + 9; while (*rest == '/') rest++;
 	const size_t n = strlen(rest);
 	for (const char *p = m; *p; ) {

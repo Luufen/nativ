@@ -229,6 +229,7 @@ def _pad16(b: bytes) -> bytes:
 
 def _build_synthetic_pkg(
     tmp_sfo: bytes, files: dict[str, bytes], *, key_type: int = 2, content_type: int = CONTENT_TYPE_APP,
+    content_id: str = "IP0177-PCSB00013_00-GOLFDS00000000",
 ) -> bytes:
     """Build a byte-exact PKG (same header/info-table/entry/AES-CTR layout as
     a real retail one) so pkg.py can be tested without a real game.
@@ -285,7 +286,7 @@ def _build_synthetic_pkg(
     data_offset_abs = sfo_offset + len(_pad16(tmp_sfo))
     total_size = data_offset_abs + region_size
 
-    content_id = b"IP0177-PCSB00013_00-GOLFDS00000000".ljust(48, b"\x00")
+    content_id = content_id.encode().ljust(48, b"\x00")   # (the header's: an add-on's own, DLC-01's tests)
     header = _HEADER.pack(
         PKG_MAGIC, 1, 0, info_offset, 3, _HEADER.size, len(names),
         total_size, data_offset_abs, region_size,

@@ -23,6 +23,7 @@
 #include "hle_small.h"
 #include "game_lang.h"   /* (GAME-LANG) the system language a game sees */
 #include "hle_offline.h"
+#include "addcont.h"   /* (DLC-01) the add-ons the player added */
 
 /* ---- common dialogs: one that was opened finishes at once with an OK result, as if the player
  * confirmed it; each kind has its own state (a dialog never opened reports NONE). The save-data
@@ -174,14 +175,19 @@ static void h_net_dlg_result(Cpu *c) {
  * did. Answered "nothing new to accept" (kind 2): there is no PSN to show terms for. */
 static void h_eula_dlg_result(Cpu *c) { if (A0) { for (int i = 0; i < 0x2c; i += 4) WR32(A0 + i, 0); WR32(A0 + 4, 2); } RET(0); }
 static void h_zero(Cpu *c) { RET(0); }
-static void h_drm_open(Cpu *c) {   /* every add-on licensed; RECOMP_NP_LOG names the ones the game asks for (Killzone's Botzone: P000000000001957) */
-	static int log = -1; if (log < 0) log = getenv("RECOMP_NP_LOG") != 0;
-	/* RECOMP_ADDCONT_NONE=1: no add-on is licensed (the error the console gives for content not installed) -- a test that
-	 * doesn't have a game's add-on files, or wants to start without them (Persona 4: Dancing All Night shows a notice per
-	 * add-on at every boot, ~1500 frames of a scripted run) */
+static void h_drm_open(Cpu *c) {   /* (SceAppUtilDrmAddcontId *, mount point): licensed when the player added that add-on (addcont.h) */
+	/* RECOMP_ADDCONT_NONE=1: no add-on is licensed, also an added one -- a test that wants to start without them (Persona 4:
+	 * Dancing All Night shows a notice per add-on at every boot, ~1500 frames of a scripted run) */
 	static int none = -1; if (none < 0) none = getenv("RECOMP_ADDCONT_NONE") != 0;
-	if (log && A0) { char id[18]; memcpy(id, G(A0), 17); id[17] = 0; fprintf(stderr, "    np: add-on licence %s -> %s\n", id, none ? "not installed" : "licensed"); }
-	RET(none ? 0x80100604u : 0);
+	char id[18] = ""; if (A0) { memcpy(id, G(A0), 17); id[17] = 0; }
+	const int owned = !none && addcont_installed(getenv("RECOMP_FS") ? getenv("RECOMP_FS") : "fs", id, strlen(id));
+	static char said[32][18]; static int nsaid; static pthread_mutex_t said_lock = PTHREAD_MUTEX_INITIALIZER;   /* (each add-on once in the log: games ask again and again) */
+	pthread_mutex_lock(&said_lock);
+	int seen = 0; for (int i = 0; i < nsaid && !seen; i++) seen = !strcmp(said[i], id);
+	if (!seen && nsaid < 32) memcpy(said[nsaid++], id, 18);
+	pthread_mutex_unlock(&said_lock);
+	if (!seen) fprintf(stderr, "    addcont: %s -> %s\n", id[0] ? id : "(none)", owned ? "installed (added to the library)" : "not installed");
+	RET(owned ? 0 : ADDCONT_ERROR_NOT_INSTALLED);
 }
 static void h_is_game(Cpu *c) { RET(1); }
 
@@ -842,7 +848,7 @@ const HleEntry hle_apputil[] = {
 	{"sceAppUtilSystemParamGetInt", h_system_param_int}, {"_sceAppMgrGetAppState", h_app_state}, {"sceSysmoduleIsLoaded", h_sysmodule_is_loaded},
 	{"sceSysmoduleLoadModule", h_sysmodule_load}, {"sceSysmoduleUnloadModule", h_sysmodule_unload},
 	{"sceAppUtilSystemParamGetString", h_system_param_string},
-	{"sceAppUtilInit", h_zero}, {"sceAppUtilShutdown", h_zero}, {"sceAppUtilDrmOpen", h_drm_open}, {"sceAppUtilDrmClose", h_zero},   /* (SceAppUtilDrmAddcontId *, mount point): the additional content's licence -- the host has no DRM, every add-on is licensed */   /* (SceAppUtilInitParam *, SceAppUtilBootParam *): nothing to set up */
+	{"sceAppUtilInit", h_zero}, {"sceAppUtilShutdown", h_zero}, {"sceAppUtilDrmOpen", h_drm_open}, {"sceAppUtilDrmClose", h_zero},   /* (SceAppUtilDrmAddcontId *, mount point): the additional content's licence -- the ones the player added (addcont.h) */   /* (SceAppUtilInitParam *, SceAppUtilBootParam *): nothing to set up */
 	{"sceAppUtilReceiveAppEvent", h_receive_app_event},
 	{"sceAppUtilAppEventParseLiveArea", h_app_event_parse}, {"sceAppUtilAppEventParseNearGift", h_app_event_parse},
 	{"sceAppUtilAppEventParseNpInviteMessage", h_app_event_parse}, {"sceAppUtilAppEventParseNpBasicJoinablePresence", h_app_event_parse},

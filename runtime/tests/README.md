@@ -257,6 +257,16 @@ covers the RUNNING state (BUSY, NOT_FINISHED for GetResult/Term, finish, Abort w
 
 It prints `all passed` and exits 0. The tests that include apputil.c also include `../core/imedlg.c`.
 
+## The add-ons a game has: `addcont_test.c`
+
+DLC-01: `addcont.h` decides which add-ons are installed -- the ones the player added, whose folders are in
+`<RECOMP_FS>/addcont0/` (the pipeline links it to the library's `decrypted/<title>/addcont/`), no others:
+sceAppUtilDrmOpen answers for them and refuses the rest, and RECOMP_ADDCONT_MARKERS makes a marker file only inside an
+added one. Names are 1..16 letters, digits or `_` (no path out of addcont0). Before, every add-on counted as owned.
+
+    cc -O1 -g -Wall -I ../core addcont_test.c -o /tmp/addcont_test && /tmp/addcont_test
+
+It prints `15 checks, all passed` and exits 0.
 ## The trophy set and unlocking: `trophy_test.c`
 
 HLE-LIB-02: `trophy_parse.h` reads a game's TROPHY.TRP (entries by name; TROPCONF.SFM ids, grades, hidden, platinum

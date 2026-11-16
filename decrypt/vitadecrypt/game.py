@@ -224,7 +224,17 @@ def convert_game(
                     klicensee, klicensee_source = info.klicensee, "work.bin (auto)"
             if klicensee is None:
                 raise GameError("this PKG needs a klicensee -- pass --license")
-            PFS.decrypt_pfs_tree(cleanup_dir, klicensee, out_dir)
+            if os.path.isfile(os.path.join(cleanup_dir, "sce_pfs", "files.db")):
+                PFS.decrypt_pfs_tree(cleanup_dir, klicensee, out_dir)
+            elif pkg_info.kind == "dlc":
+                # an add-on that is only its licence (a costume, a pass unlocked by the game's own data): no files to
+                # protect, so no PFS layer -- its plain sce_sys (param.sfo) is all there is
+                _copy_tree(cleanup_dir, out_dir)
+                wb = _find_work_bin(out_dir)
+                if wb:
+                    os.unlink(wb)   # (the licence is kept apart -- license_out --, not in the add-on's files)
+            else:
+                raise GameError(f"{input_path}: no sce_pfs/files.db in the PKG -- not a game, update or add-on PKG?")
 
         elif source == "nonpdrm":
             if klicensee is None:
@@ -447,6 +457,63 @@ def _selftest() -> None:
             _same_volume = real_same
             if other:
                 shutil.rmtree(src_base, ignore_errors=True)
+
+        # --- (f) an add-on PKG (DLC-01): its own content id and licence; its data PFS-protected like a game's ---
+        dlc_cid = "IP0177-PCSB00013_00-GOLFCLUBS0000001"
+        dlc_klic = bytes.fromhex("0f1e2d3c4b5a69788796a5b4c3d2e1f0")
+        dlc_sfo = SFO.build_sfo({"APP_VER": "01.00", "CATEGORY": "ac", "TITLE_ID": "PCSB00013", "CONTENT_ID": dlc_cid, "TITLE": "Golf Clubs"})
+        dlc_data = b"extra course " * 700
+        data_sigs_fn, data_box = _pfs_encrypt_member(dlc_data, dlc_klic)
+        dlc_sfo_sigs = _pfs_verify_only_member(dlc_sfo, dlc_klic)
+        dlc_files_db = PFS._build_files_db(dlc_klic, 0x1000, version=4, image_spec=1, entries=[
+            (0, "sce_sys", 1, PFS.FT_SYS_DIR, 0),
+            (1, "param.sfo", 2, PFS.FT_UNENC_SYS_RO, len(dlc_sfo)),
+            (0, "course.dat", 3, PFS.FT_NORMAL_FILE, len(dlc_data)),
+        ])
+        dlc_unicv_db = PFS._build_unicv_db([
+            {"num_sectors": len(PFS._chunks(dlc_sfo, PFS.FILE_SECTOR_SIZE)), "version": 1, "dbseed": None, "make_sigs": dlc_sfo_sigs},
+            {"num_sectors": len(PFS._chunks(dlc_data, PFS.FILE_SECTOR_SIZE)), "version": 1, "dbseed": None, "make_sigs": data_sigs_fn},
+        ])
+        dlc_pkg = os.path.join(tmp, "dlc.pkg")
+        with open(dlc_pkg, "wb") as f:
+            f.write(PKG._build_synthetic_pkg(dlc_sfo, {"sce_pfs/files.db": dlc_files_db, "sce_pfs/unicv.db": dlc_unicv_db,
+                                                       "sce_sys/param.sfo": dlc_sfo, "course.dat": data_box["bytes"]},
+                                             key_type=2, content_type=PKG.CONTENT_TYPE_DLC, content_id=dlc_cid))
+        dlc_rif = os.path.join(tmp, "dlc.rif")
+        with open(dlc_rif, "wb") as f:
+            f.write(RIF.build_rif(dlc_cid, dlc_klic))
+        out_g, kept = os.path.join(tmp, "out_g"), os.path.join(tmp, "out_g.rif")
+        game_g = convert_game(dlc_pkg, out_g, license_path=dlc_rif, license_out=kept)
+        assert (game_g.category, game_g.content_id, game_g.title) == ("ac", dlc_cid, "Golf Clubs"), game_g
+        assert open(os.path.join(out_g, "course.dat"), "rb").read() == dlc_data
+        assert RIF.parse_rif(open(kept, "rb").read()).content_id == dlc_cid
+        try:   # the game's licence doesn't open the add-on
+            convert_game(dlc_pkg, os.path.join(tmp, "out_g2"), license_path=license_path)
+            raise AssertionError("an add-on decrypted with another content's licence")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+        # --- (g) an add-on that is only its licence (no files, so no PFS layer): its sce_sys kept, no work.bin in it ---
+        lic_cid = "IP0177-PCSB00013_00-GOLFCADDY0000002"
+        lic_sfo = SFO.build_sfo({"APP_VER": "01.00", "CATEGORY": "ac", "TITLE_ID": "PCSB00013", "CONTENT_ID": lic_cid, "TITLE": "Caddy"})
+        lic_pkg = os.path.join(tmp, "caddy.pkg")
+        with open(lic_pkg, "wb") as f:
+            f.write(PKG._build_synthetic_pkg(lic_sfo, {"sce_sys/param.sfo": lic_sfo}, key_type=2, content_type=PKG.CONTENT_TYPE_DLC, content_id=lic_cid))
+        lic_rif = os.path.join(tmp, "caddy.rif")
+        with open(lic_rif, "wb") as f:
+            f.write(RIF.build_rif(lic_cid, dlc_klic))
+        out_h = os.path.join(tmp, "out_h")
+        game_h = convert_game(lic_pkg, out_h, license_path=lic_rif)
+        assert (game_h.category, game_h.content_id) == ("ac", lic_cid), game_h
+        assert open(os.path.join(out_h, "sce_sys", "param.sfo"), "rb").read() == lic_sfo
+        assert not os.path.exists(os.path.join(out_h, "sce_sys", "package", "work.bin"))
+        try:   # still needs its licence
+            convert_game(lic_pkg, os.path.join(tmp, "out_h2"))
+            raise AssertionError("a licence-only add-on accepted without its licence")
+        except GameError:
+            pass
 
     print("game.py self-test: OK")
 

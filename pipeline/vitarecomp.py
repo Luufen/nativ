@@ -46,6 +46,13 @@
                                             second copy; on another drive a copy, or with --in-place its folders without
                                             programs read where they are -- that drive then has to stay connected;
                                             dump/decrypted/<title>/app0.links names them. Nothing is written into the copy)
+                                            An add-on (ux0:addcont/<title>/<name>, or its PKG): decrypted with ITS OWN
+                                            licence (kept, or --license) into dump/decrypted/<title>/addcont/<name>;
+                                            nothing to build -- the game has it from its next start (each run's
+                                            fs/addcont0 links there, and only these add-ons count as installed)
+  vitarecomp addons    <title>              the title's added add-ons: name, title, version, content id (tab-separated)
+  vitarecomp remove-addon <title> <name>    an add-on out of the library (its licence stays kept)
+  vitarecomp remove-update <title>          the title's update out of the library: the game alone, imported and built again
   vitarecomp import    <title> [<dump dir>] executables (eboot.bin, sce_module/*.suprx; FAGDec
                                             output, or add's decrypted tree) -> verified ELFs; game
                                             data -> fs/app0. No dump dir: the title's own copy, its
@@ -306,6 +313,96 @@ def link_system_fonts(fs):
     elif is_link: rmtree(link)
 
 
+ADDON_CID = re.compile(r"^[A-Z]{2}\d{4}-[A-Z]{4}\d{5}_\d\d-([A-Za-z0-9_]{1,16})$")
+
+
+def addon_name(cid):
+    """an add-on's folder name, the console's ux0:addcont/<title>/<name>: its content id's last part
+    (EP9000-PCSF00243_00-KZBOTZONE0000001 -> KZBOTZONE0000001); "" for anything else"""
+    m = ADDON_CID.match(cid or "")
+    return m.group(1) if m else ""
+
+
+def link_addons(W, fs):
+    """<fs>/addcont0 -> the title's added add-ons (dump/decrypted/<title>/addcont: vitarecomp add of an add-on), the
+    console's addcont0:. Linked at every start, so an add-on added after the build counts from the next one; the
+    runtime licenses exactly these (runtime/core/addcont.h). None added: no link (a link left from before goes). A
+    real addcont0 folder in <fs> (put there by hand) is kept as it is."""
+    src, link = os.path.join(W, "addcont"), os.path.join(fs, "addcont0")
+    is_link = os.path.islink(link) or _is_junction(link)
+    if os.path.lexists(link) and not is_link: return
+    if os.path.isdir(src) and os.listdir(src):
+        if not (is_link and os.path.realpath(link) == os.path.realpath(src)): os.makedirs(fs, exist_ok=True); link_dir(src, link)
+    elif is_link: rmtree(link)
+
+
+def addon_rows(W):
+    """the title's added add-ons: (name, title, version, content id) each, by name"""
+    rows, d = [], os.path.join(W, "addcont")
+    for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if not os.path.isdir(os.path.join(d, n)): continue
+        try: j = json.load(open(os.path.join(d, n, "game.json"), encoding="utf-8"))
+        except (OSError, ValueError): j = {}
+        rows.append((n, j.get("title") or n, j.get("version") or "", j.get("content_id") or ""))
+    return rows
+
+
+def cmd_add_addon(T, args, tid, cid):
+    """an add-on (DLC) the player owns: decrypted with its own licence into dump/decrypted/<title>/addcont/<name>, the
+    game has it from its next start -- nothing to build"""
+    name = addon_name(cid)
+    if not name: die(f"{T}: an add-on with no content id Nativ can read ({cid}) -- its folder name on the Vita comes from it")
+    W = os.path.join(DUMP, "decrypted", tid)
+    if "--license" not in args and not os.path.isfile(os.path.join(T, "sce_sys", "package", "work.bin")):
+        k = subprocess.run([PY, os.path.join(R, "licenses.py"), "find", cid], env=env_with({"ATIV_DUMP": DUMP}), capture_output=True, text=True)
+        kept = k.stdout.strip() if k.returncode == 0 else ""
+        if not kept: die(f"{tid}: the add-on {name} needs its own licence ({cid}): give its licence file (.rif or work.bin, --license), or keep yours first (vitarecomp licenses)")
+        args = args + ["--license", kept]; say(f"{tid}: the add-on's licence, kept ({cid})")
+    tmp = os.path.join(DUMP, "decrypted", f".addon.{os.getpid()}"); rif = tmp + ".rif"
+    rmtree(tmp); rmtree(rif); os.makedirs(os.path.join(DUMP, "decrypted"), exist_ok=True)
+    if run([PY, "-m", "vitadecrypt.game", os.path.realpath(T), tmp] + args + ["--license-out", rif], env=env_with(TOOLS_ENV), check=False).returncode:
+        rmtree(tmp); rmtree(rif); die(f"{tid}: the add-on {name} could not be decrypted (see above): is the licence this add-on's?")
+    try: j = json.load(open(os.path.join(tmp, "game.json"), encoding="utf-8"))
+    except (OSError, ValueError): j = {}
+    if j.get("category") not in ("ac", "") or (j.get("content_id") and j["content_id"] != cid):
+        rmtree(tmp); rmtree(rif); die(f"{T}: not the add-on its header names ({j.get('category')}, {j.get('content_id')})")
+    if os.path.isfile(rif): _last_line([PY, os.path.join(R, "licenses.py"), "import", rif], env_with({"ATIV_DUMP": DUMP}))   # (kept: added again, it finds it)
+    rmtree(rif)
+    dst = os.path.join(W, "addcont", name)
+    os.makedirs(os.path.dirname(dst), exist_ok=True); rmtree(dst); os.rename(tmp, dst)
+    if os.path.isdir(os.path.join(W, "recomp", "fs")): link_addons(W, os.path.join(W, "recomp", "fs"))
+    say(f"{tid}: the add-on {j.get('title') or name} ({name}) added -> {dst}: the game has it from its next start")
+    if not os.path.isdir(os.path.join(W, "app0")): say(f"{tid}: add the game itself to play it with the add-on")
+
+
+def cmd_addons(T):
+    """the title's add-ons, one tab-separated line each: name, title, version, content id"""
+    if not TITLE_RE.match(T or ""): die("vitarecomp addons <title>")
+    for row in addon_rows(os.path.join(DUMP, "decrypted", T)): print("\t".join(x.replace("\t", " ") for x in row))
+
+
+def cmd_remove_addon(T, name):
+    if not TITLE_RE.match(T or "") or not re.fullmatch(r"[A-Za-z0-9_]{1,16}", name or ""): die("vitarecomp remove-addon <title> <add-on>")
+    W = os.path.join(DUMP, "decrypted", T); d = os.path.join(W, "addcont", name)
+    if not os.path.isdir(d): die(f"{T}: no add-on {name} in the library")
+    rmtree(d)
+    if os.path.isdir(os.path.join(W, "recomp", "fs")): link_addons(W, os.path.join(W, "recomp", "fs"))
+    say(f"{T}: the add-on {name} removed (its licence stays kept: adding it again needs no licence file)")
+
+
+def cmd_remove_update(T):
+    """the title's update out of the library: the game alone is imported and built again"""
+    if not TITLE_RE.match(T or ""): die("vitarecomp remove-update <title>")
+    W = os.path.join(DUMP, "decrypted", T)
+    if not os.path.isdir(os.path.join(W, "patch0")): die(f"{T}: no update in the library")
+    if not os.path.isdir(os.path.join(W, "app0")): die(f"{T}: the game itself isn't in the library")
+    for n in ("patch0", "patch0.links", "app0_patched"): rmtree(os.path.join(W, n))
+    say(f"{T}: its update removed -- the game alone is imported and built again")
+    run(SELF + ["import", T])
+    if packconf.pack_for(PACKS, T):
+        for c in ("analyze", "recompile", "build"): run(SELF + [c, T])
+
+
 def cmd_scan(T, rest):
     out = None
     if "--out" in rest:   # (the hub's: the rows into its file, no shell to redirect them)
@@ -327,7 +424,7 @@ def cmd_add(T, rest):
     r = subprocess.run([PY, os.path.join(R, "packs.py"), "info", os.path.realpath(T)], env=env_with(TOOLS_ENV), capture_output=True, text=True)
     ident = r.stdout.split() if r.returncode == 0 and len(r.stdout.split()) >= 4 else ["game", "-", "-", "-"]
     kind, tid, cid = ident[0], ident[1], ident[3]
-    if kind == "addon": die(f"{tid}: {os.path.basename(T)} is an add-on: nothing to add -- the game gets every add-on it asks for (runtime/core/apputil.c)", 0)
+    if kind == "addon": cmd_add_addon(T, args, tid, cid); return
     if kind == "firmware": cmd_firmware(T); return
     if kind not in ("game", "update"): die(f"{T}: a {kind}, not a game or its update")
     # no licence given and none in the copy: the player's kept licence for its content id (licenses.py; an update's is its
@@ -530,6 +627,7 @@ def cmd_import(g, src):
         if os.path.isdir(os.path.join(src, "sce_module")): run([PY, os.path.join(DECRYPT, "fself2elf.py"), os.path.join(src, "sce_module"), os.path.join(W, "elf")])
         if os.path.isdir(os.path.join(src, "data")): shutil.copytree(os.path.join(src, "data"), os.path.join(app0, "data"), symlinks=True, dirs_exist_ok=True)
     link_system_fonts(os.path.join(OUT, "fs"))   # sa0: the console's system fonts, when the library has them
+    link_addons(W, os.path.join(OUT, "fs"))   # addcont0: the add-ons the player added (DLC-01)
     # VERSIONS (packs/<title>/pack.toml): the builds the pack's hooks and addresses were made for -- another version or region
     # would mis-hook, so say so here rather than crash later; which one this is goes to $W/version, for the pack's per-version settings
     if g.VERSIONS:
@@ -733,6 +831,7 @@ def cmd_run(g, frames):
     try:
         if os.path.isfile(os.path.join(OUT, "session.log")): os.replace(os.path.join(OUT, "session.log"), os.path.join(OUT, "session.prev.log"))
         link_system_fonts(os.path.join(OUT, "fs"))   # (fonts added after the build count too)
+        link_addons(g.W, os.path.join(OUT, "fs"))   # (add-ons added or removed after the build too)
         e = game_env(g, g.RUN_ENV.split() + (ENV.get("EXTRA_ENV") or "").split(), fixed)
         rc = tee_run(g.exe_argv(os.path.join(OUT, g.EXE)) + [g.BASE + ".img", g.entry(), frames or "100000000000"], e, OUT, os.path.join(OUT, "session.log"))
     finally:
@@ -749,6 +848,7 @@ def fresh_fs(g, td):
     os.makedirs(os.path.join(td, "fs"))
     link_dir(os.path.join(g.OUT, "fs", "app0"), os.path.join(td, "fs", "app0"), relative=os.path.join("..", "..", "fs", "app0"))
     link_system_fonts(os.path.join(td, "fs"))
+    link_addons(os.path.dirname(g.OUT), os.path.join(td, "fs"))   # (OUT is <W>/recomp)
 
 
 def test_timeout(g):   # a scripted run's limit in seconds: TIMEOUT for one run, else the pack's TEST_TIMEOUT, else 300
@@ -1316,6 +1416,9 @@ def main(argv):
     if cmd == "steam": return run([PY, os.path.join(R, "steam.py")] + argv[1:], check=False).returncode
     if cmd == "licenses": return run([PY, os.path.join(R, "licenses.py")] + argv[1:], env=env_with({"ATIV_DUMP": DUMP}), check=False).returncode
     if cmd == "add": cmd_add(T, argv[2:]); return 0
+    if cmd == "addons": cmd_addons(T); return 0
+    if cmd == "remove-addon": cmd_remove_addon(T, argv[2] if len(argv) > 2 else ""); return 0
+    if cmd == "remove-update": cmd_remove_update(T); return 0
     if cmd == "dist": cmd_dist(T); return 0
     if cmd == "report": cmd_report(T); return 0
     if cmd == "pack-init": cmd_pack_init(T, "--force" in argv[2:]); return 0

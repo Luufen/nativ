@@ -39,6 +39,36 @@ static inline std::string sfo_title_file(const std::string &path) {
 	return sfo_title(buf, n);
 }
 
+/* a string field of a small flat JSON file (vitadecrypt's game.json: "version": "01.12"), "" when it has none (UPD-UI) */
+static inline std::string json_string(const std::string &text, const char *key) {
+	const std::string k = std::string("\"") + key + "\"";
+	size_t at = text.find(k); if (at == std::string::npos) return "";
+	at = text.find(':', at + k.size()); if (at == std::string::npos) return "";
+	at = text.find_first_not_of(" \t\r\n", at + 1); if (at == std::string::npos || text[at] != '"') return "";
+	std::string v;
+	auto put = [&](uint32_t c) {   /* (UTF-8) */
+		if (c < 0x80) v += (char)c;
+		else if (c < 0x800) { v += (char)(0xC0 | c >> 6); v += (char)(0x80 | (c & 63)); }
+		else if (c < 0x10000) { v += (char)(0xE0 | c >> 12); v += (char)(0x80 | (c >> 6 & 63)); v += (char)(0x80 | (c & 63)); }
+		else { v += (char)(0xF0 | c >> 18); v += (char)(0x80 | (c >> 12 & 63)); v += (char)(0x80 | (c >> 6 & 63)); v += (char)(0x80 | (c & 63)); }
+	};
+	auto hex4 = [&](size_t i) -> int { if (i + 4 > text.size()) return -1; return (int)strtol(text.substr(i, 4).c_str(), nullptr, 16); };
+	for (size_t i = at + 1; i < text.size() && text[i] != '"'; i++) {
+		if (text[i] != '\\' || i + 1 >= text.size()) { v += text[i]; continue; }
+		const char e = text[++i];
+		if (e == 'u') {   /* (Python's json.dumps writes every non-ASCII character so: "Killzone\u2122") */
+			int c = hex4(i + 1); if (c < 0) break; i += 4;
+			if (c >= 0xD800 && c < 0xDC00 && i + 6 < text.size() && text[i + 1] == '\\' && text[i + 2] == 'u') { const int lo = hex4(i + 3); if (lo >= 0xDC00 && lo < 0xE000) { c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00); i += 6; } }
+			put((uint32_t)c);
+		}
+		else v += e == 'n' ? ' ' : e == 't' ? ' ' : e;
+	}
+	return v;
+}
+/* a Vita version as the packs write it: "01.12" -> "1.12" ("" stays "") */
+static inline std::string vita_version(const std::string &v) {
+	return v.size() > 1 && v[0] == '0' && v[1] != '.' ? v.substr(1) : v;
+}
 struct PlayTime { long long last = 0, seconds = 0; };
 static inline std::map<std::string, PlayTime> playtime_parse(const std::string &text) {
 	std::map<std::string, PlayTime> m;

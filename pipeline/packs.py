@@ -9,9 +9,9 @@
       status: recommended | supported (a version its game pack plays) | check (the pack has builds with no version
           number recorded: its hash decides when added) | unsupported (a version the pack doesn't know) | nopack
           (no game pack for this title yet) | otherregion (a game Nativ has a pack for, in another region's release:
-          the pack plays its region's, by hash) | added (already in the library, this version) | licensed (an add-on:
-          the host licenses every add-on, nothing to add) | installed / firmware (a firmware file: that version is
-          installed / is not)
+          the pack plays its region's, by hash) | added (already in the library, this version; an add-on: added) |
+          addon (an add-on not added yet: added with its own licence, the game has it from its next start) |
+          installed / firmware (a firmware file: that version is installed / is not)
       licence: yes (its own sce_sys/package/work.bin) | file (one the player's licences hold -- licenses.py's store
           -- or one elsewhere in the folder, ux0:nonpdrm's .rif or a work.bin kept apart, whose content id is this
           copy's: licence_file) | game (an update: it decrypts with its game's licence, which the library or this
@@ -33,6 +33,7 @@ retail outer key (vitadecrypt.pkg.peek_pkg), a PUP's version from its header.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import struct
 import sys
@@ -186,9 +187,19 @@ def _library_version(dumps: str, title: str, kind: str) -> str:
         return ""
 
 
-def _status(kind: str, title: str, version: str, packs: str, dumps: str) -> str:
-    if kind == "addon":
-        return "licensed"
+ADDON_CID = re.compile(r"^[A-Z]{2}\d{4}-[A-Z]{4}\d{5}_\d\d-([A-Za-z0-9_]{1,16})$")
+
+
+def addon_name(content_id: str) -> str:
+    """an add-on's folder name (ux0:addcont/<title>/<name>): its content id's last part; "" for anything else"""
+    m = ADDON_CID.match(content_id or "")
+    return m.group(1) if m else ""
+
+
+def _status(kind: str, title: str, version: str, packs: str, dumps: str, content_id: str = "") -> str:
+    if kind == "addon":   # (DLC-01: in the library once added with its licence -- dump/decrypted/<title>/addcont/<name>)
+        name = addon_name(content_id)
+        return "added" if name and os.path.isdir(os.path.join(dumps, title, "addcont", name)) else "addon"
     if _library_version(dumps, title, kind) == version and version:
         return "added"
     vs = pack_versions(os.path.join(packs, title, "pack.toml"))
@@ -240,7 +251,7 @@ def scan(root: str, packs: str, dumps: str, firmware: str, import_licences: bool
             except Exception as exc:   # a broken or foreign file: say so, keep scanning
                 print(f"{p}: {exc}", file=sys.stderr)
     def own_licence(kind: str, form: str, path: str) -> bool:
-        return form == "folder" and kind == "game" and os.path.isfile(os.path.join(path, "sce_sys", "package", "work.bin"))
+        return form == "folder" and kind in ("game", "addon") and os.path.isfile(os.path.join(path, "sce_sys", "package", "work.bin"))
     if import_licences:   # the player's own licences, kept: this search is their one import (a copied game folder's own too)
         own = [os.path.join(p, "sce_sys", "package", "work.bin") for _k, f, _t, _v, _n, p, _c in found if f == "folder"]
         res = LIC.import_paths(list(licences.values()) + [o for o in own if os.path.isfile(o)])
@@ -254,7 +265,7 @@ def scan(root: str, packs: str, dumps: str, firmware: str, import_licences: bool
             status = "installed" if os.path.isdir(os.path.join(firmware, version)) else "firmware"
             licence = "yes"
         else:
-            status = _status(kind, title, version, packs, dumps)
+            status = _status(kind, title, version, packs, dumps, cid)
             if status == "nopack" and kind != "addon" and packconf.pack_for(packs, title):
                 status = "check"   # (another release's pack lists it: its hash decides when added)
             elif status == "nopack" and kind != "addon" and other_release(title, name, index):
@@ -373,8 +384,13 @@ def selftest() -> None:
         got = [(r[0], r[1], r[3], r[4], r[5]) for r in rows]
         want = [("firmware", "pup", "3.74", "installed", "yes"), ("game", "folder", "1.00", "supported", "yes"),
                 ("update", "folder", "1.01", "recommended", "game"), ("update", "pkg", "1.02", "unsupported", "game"),
-                ("addon", "folder", "", "licensed", "no")]
+                ("addon", "folder", "", "addon", "no")]
         assert got == want, got
+        # an add-on once added (DLC-01): in the library as dumps/<title>/addcont/<its content id's last part>
+        os.makedirs(os.path.join(tmp, "dumps", "PCSB00013", "addcont", "GOLFDS00000000"))
+        rows = scan(os.path.join(tmp, "ux0", "addcont"), os.path.join(tmp, "packs"), os.path.join(tmp, "dumps"), os.path.join(tmp, "firmware"))
+        assert [(r[0], r[4]) for r in rows] == [("addon", "added")], rows
+        assert addon_name("EP9000-PCSF00243_00-KZBOTZONE0000001") == "KZBOTZONE0000001" and addon_name("PCSF00243") == ""
         assert identity(os.path.join(tmp, "ux0", "patch", "PCSB00013"))[:3] == ("update", "PCSB00013", "1.01")
         # layering: the update's files over the game's, the rest hard links to the game's own
         app0, patch0, out = (os.path.join(tmp, d) for d in ("app0", "patch0", "out"))
