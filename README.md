@@ -64,6 +64,11 @@ game from your copy, plus frame-rate and widescreen settings found automatically
 - Finds games in other folders and drives (including a Vita3K installation) and can play them where they are.
 - Add or remove a game in Steam, also from the Steam Deck's Game Mode.
 - Export a built game for your own use: a folder for another Windows PC, or an AppImage for your Steam Deck.
+- **Updates & add-ons** on each game's page: which version you play and which update is recommended; add, replace or
+  remove an update (the game is built again), and add or remove add-ons (DLC) from their PKG or folder and licence
+  (nothing is built). A game sees only the add-ons you added as installed; before, it was told every add-on it asked
+  for was there.
+- **Cheats** on each game's page: pick a VitaCheat cheat file (`.psv`) for the game and tick which cheats are on.
 - Fits any window size and fullscreen; menus in English and German.
 - A title with no pack gets a first one when you add it (the system modules it needs), instead of a build that stops
   at once. Copied and saved logs, and bug reports, leave out your user folder and account IDs.
@@ -100,6 +105,9 @@ game from your copy, plus frame-rate and widescreen settings found automatically
 - **Game language:** Auto (your computer's language) or any of the Vita's 20 languages, also in the launcher's
   Settings. Games that follow the Vita's system language show their text, and often their voices, in it.
 - A full performance overlay (F1): frame times, lows, CPU and GPU load, memory.
+- **Cheats:** the menu's Game tab has a switch for each cheat of the game's cheat file; the cheats that are on are
+  applied every frame. VitaCheat's code types are read (writes, copies, pointers, button conditions, module-relative
+  addresses); cheats that would patch the game's code can't work in a recompiled game and are marked unsupported.
 
 **Picture and speed**
 - Up to 120 fps and widescreen (16:10, 21:9 and more) in more games, and 4K rendering.
