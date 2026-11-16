@@ -177,6 +177,7 @@ static uint64_t script_clock(void) {
 	if (!ms) return frames;
 	return t0 ? (now_us() - t0) / 1000 : 0;
 }
+volatile uint32_t display_pad_buttons;   /* (CHEAT-01) the buttons the game last read on port 0 */
 static void h_set_frame_buf(Cpu *c) {
 	metrics_game_frame();   /* once per presented game frame: frame-time stats, last frame's renderer/GPU-draw counts, the ~1 Hz RECOMP_METRICS line (metrics.c) */
 	frames++;
@@ -187,6 +188,7 @@ static void h_set_frame_buf(Cpu *c) {
 	if (!unpaced()) vb_grid_follow(frame_rate());   /* the grid at 120 Hz while the rate is 120 (frame_rates.h) */
 	if (frame_hook) frame_hook(frames);
 	{ extern void memscan_frame(uint64_t); memscan_frame(frames); }   /* RECOMP_MEMSCAN (memscan.c) */
+	{ extern void cheats_frame(uint64_t); cheats_frame(frames); }   /* the player's cheats (cheats.c) */
 	if (hitch_dur > 0 && hitch_dur < 200000) { float ms = hitch_dur / 1e3f; frame_period_ms += (ms - frame_period_ms) * 0.05f; }   /* the flip interval (display_frame_period_ms) */
 	{ extern void sysmem_dump_maybe(uint64_t); sysmem_dump_maybe(frames); }
 	if (!t0) t0 = now_us();
@@ -904,6 +906,7 @@ static void ctrl_peek(Cpu *c, int pad2, int v2) {   /* (port, SceCtrlData *, cou
 		}
 		if (i == 0) {
 			uint32_t db = RD32(p + 8);
+			{ extern volatile uint32_t display_pad_buttons; display_pad_buttons = db; }   /* (CHEAT-01: a button cheat's condition) */
 			uint8_t dst[4] = { RD8(p + 12), RD8(p + 13), RD8(p + 14), RD8(p + 15) };
 			static uint32_t ev_b; static uint8_t ev_st[4]; static int ev_have;
 			if (rec_file) {

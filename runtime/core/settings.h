@@ -68,6 +68,8 @@
  *   volume        window.c    0..1 (default 1)          master volume: every audio port's gain (RECOMP_VOLUME wins)
  *   audio_sync_trim_ms window.c  -100..100 (default 0)  added to the automatic audio delay (no menu: the A/V sync is measured; for a TV or receiver that adds latency of its own)
  *   audio_buffers window.c    1..4 (default 1)          buffers an audio port may queue ahead (latency vs. crackle; RECOMP_AUDIO_QUEUE wins)
+ *   cheats_on     cheats.c    "1,4": the cheats of the game's cheats.psv switched on, by their place in it from 1 (absent:
+ *                             the file's _V1 ones); the game's own file (the launcher's Cheats page and the menu's Game tab)
  *   menu_hint_shown  overlay.cpp  1 once the first-launch hint ("move the mouse to the top for the
  *                             menu") has been shown; absent: show it on this game's next windowed run
  *

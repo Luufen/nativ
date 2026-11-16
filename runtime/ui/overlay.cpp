@@ -536,6 +536,7 @@ static void page_performance(void) {
 	{ char b[32]; std::snprintf(b, sizeof b, "%.0f fps", metrics_fps()); ImGui::PushFont(nullptr, ImGui::GetFontSize() * 1.6f); ImGui::TextUnformatted(b); ImGui::PopFont(); }
 	ui::rows_end();
 }
+extern "C" int cheats_count(void); extern "C" void cheats_get(int i, char *name, int nn, char *note, int nnote, int *is_on); extern "C" void cheats_set(int i, int is_on);   /* (CHEAT-01: cheats.c) */
 static void page_game(void) {
 	prefs_load();
 	if (!ui::rows_begin("game")) return;
@@ -617,7 +618,17 @@ static void page_game(void) {
 			ImGui::SetNextItemWidth(-FLT_MIN); ImGui::InputText("##srv", srv, sizeof srv); if (ImGui::IsItemDeactivatedAfterEdit()) { settings_set_str("private_server", srv); save_settings(); }
 		}
 	}
-	ui::row(ui_tr("game.volume"), nullptr, note_flt("volume", P.vol));
+	if (cheats_count() > 0) {   /* (CHEAT-01) the player's cheats file (cheats.c): each switched here, from the next frame */
+		ui::row(ui_tr("game.cheats"), ui_tr("game.cheats_help"));
+		for (int i = 0, n = cheats_count(); i < n; i++) {
+			char name[80], note[160], id[24]; int is_on = 0; cheats_get(i, name, sizeof name, note, sizeof note, &is_on);
+			char help[220]; if (note[0]) snprintf(help, sizeof help, "%s: %s", ui_tr("game.cheat_unsupported"), note);
+			char label[120]; if (note[0]) snprintf(label, sizeof label, "%s (%s)", name, ui_tr("game.cheat_unsupported")); else snprintf(label, sizeof label, "%s", name);
+			ui::row(label, note[0] ? help : nullptr);
+			snprintf(id, sizeof id, "cheat%d", i);
+			bool b = is_on != 0; if (ui::toggle(id, &b)) { cheats_set(i, b ? 1 : 0); save_settings(); }
+		}
+	}	ui::row(ui_tr("game.volume"), nullptr, note_flt("volume", P.vol));
 	{ float pct = P.vol * 100.0f; ImGui::SetNextItemWidth(-FLT_MIN); if (ui::slider_float("##vol", &pct, 0.0f, 100.0f, "%.0f%%")) set_volume(pct / 100.0f); }
 	ui::rows_end();
 }

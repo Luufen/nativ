@@ -90,7 +90,13 @@ static void h_find_block_by_addr(Cpu *c) {
 	}
 	RET(0x8002000Bu);   /* SCE_KERNEL_ERROR_ILLEGAL_ADDR */
 }
-static void h_block_base(Cpu *c) {
+int sysmem_block_holds(uint32_t a, uint32_t n) {   /* (CHEAT-01: a cheat writes only the game's memory) */
+	int yes = 0;
+	pthread_mutex_lock(&block_lock);
+	for (int i = 0; i < nblocks && !yes; i++) { const uint32_t off = a - blocks[i][0]; yes = blocks[i][1] && a >= blocks[i][0] && off < blocks[i][1] && n <= blocks[i][1] - off; }
+	pthread_mutex_unlock(&block_lock);
+	return yes;
+}static void h_block_base(Cpu *c) {
 	uint32_t i = A0 - 0x10000;
 	if (i >= (uint32_t)nblocks || !blocks[i][1]) { RET(0x80020001); return; }
 	WR32(A1, blocks[i][0]); RET(0);

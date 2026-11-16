@@ -68,6 +68,22 @@ int guest_mem_ranges(uint32_t lo[], uint32_t hi[], int max) {
 	lo[n] = GUEST_HEAP; hi[n] = heap_top; n++;
 	return n;
 }
+/* (CHEAT-01) a loaded image's segment, images counted in load order (0: the game's), segments within it (0: its code,
+ * 1: its data); 0 when there's no such one */
+int guest_image_segment(int image, int seg, uint32_t *lo, uint32_t *hi) {
+	int img = -1, k = 0;
+	for (int i = 0; i < nseg; i++) {
+		if (!i || seg_img[i] != seg_img[i - 1]) { img++; k = 0; } else k++;
+		if (img == image && k == seg) { if (lo) *lo = seg_lo[i]; if (hi) *hi = seg_hi[i]; return 1; }
+	}
+	return 0;
+}
+/* (CHEAT-01) does a lie in an image's first segment, its code? */
+int guest_addr_is_code(uint32_t a) {
+	for (int i = 0; i < nseg; i++)
+		if ((!i || seg_img[i] != seg_img[i - 1]) && a >= seg_lo[i] && a < seg_hi[i]) return 1;
+	return 0;
+}
 uint32_t guest_alloc(uint32_t size, uint32_t align) {
 	if (align < 16) align = 16;
 	pthread_mutex_lock(&host_lock);

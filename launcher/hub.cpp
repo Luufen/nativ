@@ -17,7 +17,7 @@
  * ATIV_PREFS=<dir>: the launcher's own files and the shared settings there instead of the user's app folder (a test).
  * ATIV_DUMP=<dir>: the library (games, firmware, licences, builds, saves) there instead of the usual one, library_dir (a
  * fresh library to try setup on; the stages it runs inherit it). ATIV_SHOT=f.ppm (a verification aid, no visible window): renders the hub once into f.ppm and exits;
- * ATIV_SHOT_UI=library|setup:<0-4>|add|settings:<0-2>|game:<title>|more:<title>|content:<title>|sac|sac:again picks what is on screen, ATIV_SHOT_SIZE=WxH the size (1280x800),
+ * ATIV_SHOT_UI=library|setup:<0-4>|add|settings:<0-2>|game:<title>|more:<title>|content:<title>|cheats:<title>|sac|sac:again picks what is on screen, ATIV_SHOT_SIZE=WxH the size (1280x800),
  * ATIV_SHOT_SCAN=<rows> a folder search's results (vitarecomp scan's output) in the Add dialog,
  * ATIV_SHOT_LIBSCAN=<rows> the library folders' search (vitarecomp folders scan's output: "Found in" on the cards);
  * the library folders themselves are <prefs>/library_folders.tsv (ATIV_PREFS=<dir> for a test's).
@@ -718,9 +718,11 @@ static void pick_folder(SDL_Window *w, std::string *target) { if (use_in_app_bro
 static const SDL_DialogFileFilter k_pick_pkg[] = {{"PS Vita game, update or add-on (*.pkg)", "pkg"}, {"All files (*.*)", "*"}};
 static const SDL_DialogFileFilter k_pick_licence[] = {{"Licence file (*.rif, work.bin)", "rif;bin"}, {"All files (*.*)", "*"}};
 static const SDL_DialogFileFilter k_pick_pup[] = {{"PS Vita system update (*.PUP)", "pup"}, {"All files (*.*)", "*"}};
+static const SDL_DialogFileFilter k_pick_psv[] = {{"VitaCheat cheat file (*.psv)", "psv"}, {"All files (*.*)", "*"}};
 static void pick_pkg(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_pkg, 2, BROWSE_PKG); }
 static void pick_licence(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_licence, 2, BROWSE_LICENCE); }
 static void pick_pup(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_pup, 2, BROWSE_PUP); }
+static void pick_psv(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_psv, 2, BROWSE_CHEATS); }
 static void pick_poll(void) {
 	std::lock_guard<std::mutex> l(g_pick_lock);
 	if (g_pick_done && g_pick_target) *g_pick_target = g_pick_result;
@@ -1527,7 +1529,7 @@ static void ini_save(const Ini &x, const std::string &path, const char *header) 
 static const char *const SHARED_HEADER = "# Project Nativ's settings for every game (the launcher's Settings, and each game's menu; runtime/core/settings.h)";
 static const char *const GAME_HEADER = "# vitarecomp settings for this game: its own options, and where it differs from the shared settings (runtime/core/settings.h)";
 static bool game_key(const std::string &k) {   /* (settings.c's game_key: kept in the game's own file) */
-	for (const char *g : {"fov", "view_distance", "scenery_detail", "character_detail", "private_server", "net_redirect", "menu_hint_shown", "controller_layout"}) if (k == g) return true;
+	for (const char *g : {"fov", "view_distance", "scenery_detail", "character_detail", "private_server", "net_redirect", "menu_hint_shown", "controller_layout", "cheats_on"}) if (k == g) return true;
 	return false;
 }
 /* the shared keys' defaults where a game reads no value (runtime/core/settings.h; the consumers' own) --
@@ -1535,6 +1537,7 @@ static bool game_key(const std::string &k) {   /* (settings.c's game_key: kept i
 #include "setting_defaults.h"
 #include "frame_rates.h"   /* the frame-rate rules: a game's allowed rates (its pack's RECOMP_FRAME_RATES) */
 #include "../core/game_lang.h"   /* (GAME-LANG) the Vita system language games see: the language row */
+#include "../core/cheats.h"   /* (CHEAT-01) a VitaCheat cheat file's cheats: the Cheats page */
 /* keys only some games read (an online one, a camera one, one with ambient occlusion): a game without the key never chose */
 static bool some_games_key(const std::string &k) { return k == "online_id" || k == "online" || k == "np_account_id" || k == "np_age" || k == "camera" || k == "ssao" || k == "ssao_strength"; }
 static std::string shared_path(void) { std::string d = pref_dir(); return d.empty() ? "" : d + "settings.ini"; }
@@ -3253,6 +3256,7 @@ static void export_modal(void) {
 }
 static std::string g_content_game;   /* (UPD-UI, DLC-01) the game whose "Updates & add-ons" is open; ATIV_SHOT_UI=content:<title> */
 static std::string g_upd_path, g_addon_path, g_addon_lic;
+static std::string g_cheats_game;   /* (CHEAT-01) the game whose Cheats page is open; ATIV_SHOT_UI=cheats:<title> */
 static void game_page_modal(void) {
 	if (g_game_page.empty()) return;
 	const Game *gp = nullptr; for (const Game &x : g_games) if (x.id == g_game_page) gp = &x;
@@ -3321,6 +3325,7 @@ static void game_page_modal(void) {
 		std::string expl = "Its version: " + (g.update_version.empty() ? "the game " + (g.game_version.empty() ? g.version : g.game_version) + ", no update" : "update " + g.update_version + " added")
 		                 + ". Add-ons: " + (g.addons.empty() ? "none added" : std::to_string(g.addons.size()) + " added") + ". Add or remove an update or add-ons you own.";
 		if (action("Updates & add-ons…", expl.c_str(), false, true)) { g_content_game = g.id; close = true; }
+		if (action("Cheats…", "Your own VitaCheat cheat file (.psv) for this game: pick which cheats are on. In the game, its menu (Game) switches them too.", false, true)) { g_cheats_game = g.id; close = true; }
 	}
 	if (g.imported && action("Game settings", "This game's own options (field of view, view distance, ...) and the values it keeps apart from the shared Settings.", false, true)) {
 		make_dir(g_dump + "/decrypted/" + g.id + "/recomp"); g_game_settings = g.id; close = true;
@@ -3462,6 +3467,88 @@ static void content_modal(void) {
 	ImGui::EndPopup();
 }
 
+/* ---- a game's cheats (CHEAT-01; the owner, 2026-11-16: "füge nun auch die Möglichkeit für Cheats hinzu"): the player's
+ * own VitaCheat cheat file (.psv; nothing of a cheat database ships with Nativ), kept as the game's recomp/cheats.psv,
+ * and which of its cheats are on -- the game's own setting cheats_on ("1,4": places in the file from 1; absent: the
+ * file's _V1 ones). The game applies them every frame (runtime/core/cheats.c); its menu's Game tab switches them too. */
+static std::string g_psv_path, g_cheats_err;
+static std::string cheats_file(const std::string &id) { return g_dump + "/decrypted/" + id + "/recomp/cheats.psv"; }
+static bool copy_file(const std::string &from, const std::string &to) {
+	const std::string text = read_file(from); if (text.empty()) return false;
+	FILE *f = fopen((to + ".new").c_str(), "wb"); if (!f) return false;
+	const bool ok = fwrite(text.data(), 1, text.size(), f) == text.size(); fclose(f);
+	if (!ok) { remove((to + ".new").c_str()); return false; }
+	remove(to.c_str()); return rename((to + ".new").c_str(), to.c_str()) == 0;
+}
+static void cheats_modal(void) {
+	if (g_cheats_game.empty()) return;
+	const Game *gp = nullptr; for (const Game &x : g_games) if (x.id == g_cheats_game) gp = &x;
+	if (!gp) { g_cheats_game.clear(); return; }
+	const Game &g = *gp;
+	const ImGuiViewport *vp = ImGui::GetMainViewport(); const float em = ImGui::GetFontSize();
+	if (!ImGui::IsPopupOpen("##cheats")) ImGui::OpenPopup("##cheats");
+	ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x < 48 * em ? vp->WorkSize.x * 0.94f : 44 * em, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(1.6f * em, 1.3f * em)); ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	if (!ImGui::BeginPopupModal("##cheats", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove)) { ImGui::PopStyleVar(2); return; }
+	ImGui::PopStyleVar(2);
+	ImGui::PushTextWrapPos(0); ui::heading("Cheats", em * 1.4f); ImGui::TextDisabled("%s  ·  %s", g.name.c_str(), g.id.c_str()); ImGui::PopTextWrapPos();
+	bool close = false;
+	dialog_body_begin();
+	ImGui::PushTextWrapPos(0);
+	const std::string file = cheats_file(g.id);
+	CheatSet set = {}; const int n = exists(file) ? cheats_parse(read_file(file).c_str(), &set) : 0;
+	if (!exists(file)) ImGui::TextDisabled("No cheat file for this game yet.");
+	else if (n <= 0) { ui::dot(ui::warn); ImGui::TextWrapped("Its cheat file holds no cheats Nativ can read."); }
+	else {
+		Ini ini = ini_load(game_settings_path(g.id));
+		const std::string *cur = ini_find(ini, "cheats_on");
+		std::vector<char> on((size_t)n, 0);
+		if (!cur) for (int i = 0; i < n; i++) on[(size_t)i] = (char)set.c[i].def_on;
+		else for (const std::string &w : split_ws(*cur)) { const int k = atoi(w.c_str()); if (k >= 1 && k <= n) on[(size_t)k - 1] = 1; }
+		int changed = -1;
+		for (int i = 0; i < n; i++) {
+			ImGui::PushID(i);
+			bool b = on[(size_t)i] != 0;
+			const std::string label = ui::text_drawable(set.c[i].name) ? set.c[i].name : std::string("Cheat ") + std::to_string(i + 1);
+			if (ImGui::Checkbox(label.c_str(), &b)) { on[(size_t)i] = b; changed = i; }
+			ImGui::PopID();
+		}
+		if (changed >= 0) {
+			std::string v; for (int i = 0; i < n; i++) if (on[(size_t)i]) v += (v.empty() ? "" : ",") + std::to_string(i + 1);
+			Ini disk = ini_load(game_settings_path(g.id)); ini_set(disk, "cheats_on", v);
+			make_dir(g_dump + "/decrypted/" + g.id + "/recomp"); ini_save(disk, game_settings_path(g.id), GAME_HEADER);
+		}
+		ui::muted_wrapped("On at the game's next start; in the game, its menu (Game) switches them at once. A cheat that changes the game's code (an ARM write into it) has no effect on a recompiled game: the game's menu marks it.");
+	}
+	cheats_free(&set);
+	ImGui::Dummy(ImVec2(0, em * 0.4f));
+	if (path_row("##psvpath", g_psv_path, "A cheat file: VitaCheat's .psv for this game (its title id, version and region)")) pick_psv(nullptr, &g_psv_path);
+	ImGui::BeginDisabled(g_psv_path.empty());
+	if (ImGui::Button(exists(file) ? "Use this file instead" : "Use this file")) {
+		CheatSet t = {}; const int k = cheats_parse(read_file(g_psv_path).c_str(), &t); cheats_free(&t);
+		if (k <= 0) g_cheats_err = "No cheats Nativ can read in that file (VitaCheat's _V0 / _V1 and $ lines).";
+		else {
+			make_dir(g_dump + "/decrypted/" + g.id + "/recomp");
+			if (!copy_file(g_psv_path, file)) g_cheats_err = "The file could not be copied into the game's folder.";
+			else { g_cheats_err.clear(); g_psv_path.clear(); Ini disk = ini_load(game_settings_path(g.id)); ini_erase(disk, "cheats_on"); ini_save(disk, game_settings_path(g.id), GAME_HEADER); }
+		}
+	}
+	ImGui::EndDisabled();
+	if (exists(file)) {
+		same_line_fits(button_w("Remove the cheat file"));
+		if (ImGui::Button("Remove the cheat file")) { remove(file.c_str()); Ini disk = ini_load(game_settings_path(g.id)); ini_erase(disk, "cheats_on"); ini_save(disk, game_settings_path(g.id), GAME_HEADER); }
+	}
+	if (!g_cheats_err.empty()) { ui::dot(ui::warn); ImGui::TextWrapped("%s", g_cheats_err.c_str()); }
+	ui::muted_wrapped("Your own cheat file: Nativ comes with none. Cheats change the game's memory while it runs and can break a game or its saves: keep a copy of your saves.");
+	ImGui::PopTextWrapPos();
+	dialog_body_end();
+	if (ImGui::Button("Back") || dialog_back()) close = true;
+	dialog_hints();
+	child_dialogs();
+	if (close) { g_cheats_game.clear(); g_psv_path.clear(); g_cheats_err.clear(); ImGui::CloseCurrentPopup(); }
+	ImGui::EndPopup();
+}
 /* ---- the log, copied or saved whole (the activity bar's Copy log / Save log...): for a bug report or a question */
 static std::mutex g_log_note_lock;
 static std::string g_log_note, g_log_note_key; static Uint64 g_log_note_until;   /* "Copied" / "Saved" on its button for a moment */
@@ -3821,6 +3908,7 @@ static void hub_ui(SDL_Window *win) {
 	game_settings_modal();
 	game_page_modal();
 	content_modal();
+	cheats_modal();
 	if (g_browse.top) browser_modal();   /* (one opened with no dialog around it) */
 	if (g_osk.top) osk_modal();
 	{	/* (a press of B this frame that ImGui used to end an edit or close a menu: no dialog takes it next frame either) */
@@ -4286,6 +4374,7 @@ int main(int argc, char **argv) {
 		if (ui_sel.rfind("game:", 0) == 0) g_game_settings = ui_sel.substr(5);
 		if (ui_sel.rfind("more:", 0) == 0) g_game_page = ui_sel.substr(5);
 		if (ui_sel.rfind("content:", 0) == 0) g_content_game = ui_sel.substr(8);
+		if (ui_sel.rfind("cheats:", 0) == 0) g_cheats_game = ui_sel.substr(7);
 		if (ui_sel.rfind("name:", 0) == 0) g_name_game = ui_sel.substr(5);
 		if (ui_sel == "map:diagram") { g_settings_open = true; g_settings_tab = 1; g_map_type = 0; g_diag_scroll = true; }   /* (UI-02c: the drawing in view) */
 		else if (ui_sel.rfind("map:spot:", 0) == 0) { g_settings_open = true; g_settings_tab = 1; g_map_type = 0; g_spot.open = true; g_spot.spot = atoi(ui_sel.c_str() + 9) % PD_N; }
@@ -4312,7 +4401,7 @@ int main(int argc, char **argv) {
 			static std::string picked_here;
 			const std::string rest = ui_sel.substr(7); const size_t c = rest.find(':');
 			const std::string k = rest.substr(0, c);
-			browse_open(&picked_here, k == "pkg" ? BROWSE_PKG : k == "licence" ? BROWSE_LICENCE : k == "pup" ? BROWSE_PUP : BROWSE_FOLDER);
+			browse_open(&picked_here, k == "pkg" ? BROWSE_PKG : k == "licence" ? BROWSE_LICENCE : k == "pup" ? BROWSE_PUP : k == "psv" ? BROWSE_CHEATS : BROWSE_FOLDER);
 			g_browse.top = true; browse_go(c == std::string::npos ? std::string() : rest.substr(c + 1));
 		}
 		if (getenv("ATIV_SHOT_NOFW") && *getenv("ATIV_SHOT_NOFW")) { g_firmware = false; g_firmware_version.clear(); }

@@ -267,6 +267,17 @@ added one. Names are 1..16 letters, digits or `_` (no path out of addcont0). Bef
     cc -O1 -g -Wall -I ../core addcont_test.c -o /tmp/addcont_test && /tmp/addcont_test
 
 It prints `15 checks, all passed` and exits 0.
+## Cheats: `cheats_test.c`
+
+CHEAT-01: `cheats.h` reads a VitaCheat cheat file (.psv: `_V0`/`_V1` cheats, `$TXLL AAAAAAAA BBBBBBBB` lines) and applies
+every code type VitaCheat's wiki documents -- write, copy, compression, pointer write (levels 1-3), pointer
+compression, pointer copy, data write (restored when switched off, refused into code: no effect on a recompiled game),
+buttons, conditions, B2 module-relative addresses -- on a buffer standing in for guest memory. Writes outside the
+game's memory are skipped; an unknown code type marks the cheat unsupported.
+
+    cc -O1 -g -Wall -I ../core cheats_test.c -o /tmp/cheats_test && /tmp/cheats_test
+
+It prints `31 checks, all passed` and exits 0.
 ## The trophy set and unlocking: `trophy_test.c`
 
 HLE-LIB-02: `trophy_parse.h` reads a game's TROPHY.TRP (entries by name; TROPCONF.SFM ids, grades, hidden, platinum

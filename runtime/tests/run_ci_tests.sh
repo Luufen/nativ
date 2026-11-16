@@ -56,6 +56,7 @@ run sysinfo_test      -O1 -g -Wall -I ../ui sysinfo_test.c
 run cdlg_test         -O1 -g -Wall -I ../core cdlg_test.c
 run imedlg_test       -O1 -g -Wall -I ../core imedlg_test.c ../core/imedlg.c -lpthread
 run addcont_test      -O1 -g -Wall -I ../core addcont_test.c
+run cheats_test       -O1 -g -Wall -I ../core cheats_test.c
 
 if [ "$fail" -ne 0 ]; then echo "$fail test(s) failed"; exit 1; fi
 echo "all runtime tests passed"
