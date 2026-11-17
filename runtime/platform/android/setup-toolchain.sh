@@ -25,9 +25,12 @@ SDL=3.4.16
 SDL_SHA=7322236cd12090c3eb40b9728be4d49c76f66ad17d04369584d4ecad5cf77c68
 ZLIB=1.3.1
 ZLIB_SHA=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+FFMPEG=7.1.1               # (the Linux script's: H.264 + AAC decoders for the movies, EXPORT-APK A9)
+FFMPEG_SHA=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
 API=29                     # the oldest Android a game runs on: 10 (64-bit only, Vulkan 1.1 on new devices)
 ABIS="arm64-v8a x86_64"
 D=${ATIV_ANDROID_TOOLCHAIN:-$HOME/toolchains/ativ-android}
+HERE=$(cd "$(dirname "$0")" && pwd)   # (runtime/platform/android: rawdec.c is in ../ffmpeg)
 mkdir -p "$D/dl"; cd "$D/dl"
 verify() { local h; h=$(sha256sum "$1" | awk '{print $1}'); [[ $h == "$2" ]] && return; echo "checksum mismatch: $1 (expected $2, got $h)"; rm -f "$1"; exit 1; }
 fetch() { [[ -f $2 ]] || { curl -fsSL --retry 5 --retry-all-errors -o "$2.part" "$1" && verify "$2.part" "$3" && mv -f "$2.part" "$2"; }; }
@@ -37,6 +40,7 @@ fetch "https://dl.google.com/android/repository/$PLATFORM_ZIP" "$PLATFORM_ZIP" "
 fetch "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-${JDK/+/%2B}/$JDK_TGZ" "$JDK_TGZ" "$JDK_SHA"
 fetch "https://github.com/libsdl-org/SDL/releases/download/release-$SDL/SDL3-$SDL.tar.gz" "SDL3-$SDL.tar.gz" "$SDL_SHA"
 fetch "https://github.com/madler/zlib/releases/download/v$ZLIB/zlib-$ZLIB.tar.gz" "zlib-$ZLIB.tar.gz" "$ZLIB_SHA"
+fetch "https://ffmpeg.org/releases/ffmpeg-$FFMPEG.tar.xz" "ffmpeg-$FFMPEG.tar.xz" "$FFMPEG_SHA"
 cd "$D"
 # a zip's one top folder as <dest>, keeping the programs' modes and the symlinks (no unzip needed)
 unzip_to() {
@@ -95,6 +99,22 @@ for abi in $ABIS; do
       -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL_DOCS=OFF > "sdl-configure-$abi.log"
     cmake --build "sdl-build-$abi" -j"$(nproc)" > "sdl-build-$abi.log" 2>&1 && cmake --install "sdl-build-$abi" >> "sdl-build-$abi.log" 2>&1
   fi
+  # FFmpeg's H.264 and AAC decoders (libavcodec + libavutil, static, position-independent and with hidden symbols: linked
+  # into libmain.so -- its arm64 assembly addresses tables such as ff_tx_tab_32_float directly, which a shared library
+  # allows only for symbols it does not export: "relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol") and the
+  # AAC raw-frame shim, as the Linux and Windows toolchains have them (runtime/media/video.c's sceAvcdec: the movies)
+  if [[ ! -f $abi/ffmpeg/lib/libavcodec.a || ! -f $abi/ffmpeg/lib/libnativ_rawdec.a ]]; then
+    case $abi in arm64-v8a) arch=aarch64; asm=;; x86_64) arch=x86_64; asm=--disable-x86asm;; esac
+    rm -rf "$abi/ffmpeg" "ffmpeg-src-$abi"; mkdir "ffmpeg-src-$abi"; tar xJf "dl/ffmpeg-$FFMPEG.tar.xz" -C "ffmpeg-src-$abi" --strip-components 1
+    ( cd "ffmpeg-src-$abi" && ./configure --prefix="$D/$abi/ffmpeg" --enable-cross-compile --target-os=android --arch=$arch \
+        --cc="$D/bin/$abi-cc" --cxx="$D/bin/$abi-c++" --ar="$LLVM/bin/llvm-ar" --ranlib="$LLVM/bin/llvm-ranlib" --nm="$LLVM/bin/llvm-nm" --strip="$LLVM/bin/llvm-strip" \
+        --enable-static --disable-shared --enable-pic --disable-everything --disable-programs --disable-doc --disable-network --disable-autodetect \
+        --disable-avdevice --disable-avformat --disable-swscale --disable-swresample --disable-avfilter --disable-debug \
+        --enable-decoder=h264 --enable-parser=h264 --enable-parser=hevc --enable-decoder=aac $asm --extra-cflags=-fvisibility=hidden > "../ffmpeg-configure-$abi.log" \
+      && make -j"$(nproc)" > "../ffmpeg-build-$abi.log" 2>&1 && make install >> "../ffmpeg-build-$abi.log" 2>&1 \
+      && "$D/bin/$abi-cc" -O2 -fPIC -I. -c "$HERE/../ffmpeg/rawdec.c" -o rawdec.o && "$LLVM/bin/llvm-ar" rcs "$D/$abi/ffmpeg/lib/libnativ_rawdec.a" rawdec.o )
+    [[ -f $abi/ffmpeg/lib/libavcodec.a ]] || { echo "FFmpeg for $abi failed: $D/ffmpeg-build-$abi.log"; exit 1; }
+  fi
 done
 # SDL's Java side, once: compiled against android.jar (classes.jar: what an app's own Activity builds against), then d8
 # into classes.dex (what an APK carries)
@@ -108,6 +128,8 @@ fi
 # their licences beside them (an APK ships libSDL3.so and the dex)
 mkdir -p share/licenses
 cp sdl-src/LICENSE.txt share/licenses/SDL3-LICENSE.txt; cp zlib-src/LICENSE share/licenses/zlib-LICENSE.txt
+src1=(ffmpeg-src-*); cp "${src1[0]}/LICENSE.md" share/licenses/FFmpeg-LICENSE.md; cp "${src1[0]}/COPYING.LGPLv2.1" share/licenses/FFmpeg-COPYING.LGPLv2.1
+printf 'FFmpeg %s (LGPL 2.1 or later), unmodified: https://ffmpeg.org/releases/ffmpeg-%s.tar.xz\nbuilt by runtime/platform/android/setup-toolchain.sh with only the H.264 and AAC decoders and the parsers enabled, plus libnativ_rawdec.a (runtime/platform/ffmpeg/rawdec.c).\n' "$FFMPEG" "$FFMPEG" > share/licenses/FFmpeg-SOURCE.txt
 # check: a small libmain.so per ABI that links SDL3 and zlib, as an APK's code will
 mkdir -p check
 cat > check/main.c <<'C'
@@ -122,4 +144,4 @@ for abi in $ABIS; do
     -L"$abi/SDL3/lib" -lSDL3 "$abi/zlib/lib/libz.a" -llog -Wl,-z,max-page-size=16384
   ok="$ok $abi:$("$LLVM/bin/llvm-readelf" -h "check/libmain-$abi.so" | awk -F: '/Machine/ {gsub(/^ +/,"",$2); print $2}' | tr ' ' '_')"
 done
-echo "toolchain: $D (NDK $NDK clang $("$LLVM/bin/clang" --version | head -1 | sed 's/.*clang version \([0-9.]*\).*/\1/'), API $API; build-tools $BUILD_TOOLS, android-$PLATFORM; JDK $("$JAVA_HOME/bin/java" -version 2>&1 | head -1 | sed 's/.*"\(.*\)".*/\1/'); SDL3 $SDL; zlib $ZLIB; sdl-java $(ls sdl-java/classes.dex >/dev/null 2>&1 && echo classes.dex || echo MISSING); check$ok)"
+echo "toolchain: $D (NDK $NDK clang $("$LLVM/bin/clang" --version | head -1 | sed 's/.*clang version \([0-9.]*\).*/\1/'), API $API; build-tools $BUILD_TOOLS, android-$PLATFORM; JDK $("$JAVA_HOME/bin/java" -version 2>&1 | head -1 | sed 's/.*"\(.*\)".*/\1/'); SDL3 $SDL; zlib $ZLIB; FFmpeg $FFMPEG $(ls */ffmpeg/lib/libavcodec.a 2>/dev/null | wc -l)/2 ABIs; sdl-java $(ls sdl-java/classes.dex >/dev/null 2>&1 && echo classes.dex || echo MISSING); check$ok)"

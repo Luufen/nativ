@@ -291,7 +291,11 @@ def main(argv):
     elif MT:   # the Mac toolchain's static FFmpeg (H.264 and AAC decoders)
         if os.path.isfile(os.path.join(MT, "ffmpeg", "lib", "libavcodec.a")): AVCODEC = ["-DRECOMP_AVCODEC", "-I" + os.path.join(MT, "ffmpeg", "include"), os.path.join(MT, "ffmpeg", "lib", "libavcodec.a"), os.path.join(MT, "ffmpeg", "lib", "libavutil.a")]
         if AVCODEC and os.path.isfile(os.path.join(MT, "ffmpeg", "lib", "libnativ_rawdec.a")): AVCODEC[1:1] = ["-DRECOMP_RAWDEC"]; AVCODEC.insert(3, os.path.join(MT, "ffmpeg", "lib", "libnativ_rawdec.a"))   # (sceAudiodec AAC)
-    elif not WIN and not ANDROID and pkg_exists("libavcodec", "libavutil"):   # (Android: no movies yet -- EXPORT-APK A9)
+    elif ANDROID:   # the Android toolchain's static FFmpeg per ABI (H.264 and AAC decoders; EXPORT-APK A9), as on Linux
+        FF = os.path.join(AA, "ffmpeg")
+        if os.path.isfile(os.path.join(FF, "lib", "libavcodec.a")): AVCODEC = ["-DRECOMP_AVCODEC", "-I" + os.path.join(FF, "include"), os.path.join(FF, "lib", "libavcodec.a"), os.path.join(FF, "lib", "libavutil.a")]
+        if AVCODEC and os.path.isfile(os.path.join(FF, "lib", "libnativ_rawdec.a")): AVCODEC[1:1] = ["-DRECOMP_RAWDEC"]; AVCODEC.insert(3, os.path.join(FF, "lib", "libnativ_rawdec.a"))   # (sceAudiodec AAC)
+    elif not WIN and pkg_exists("libavcodec", "libavutil"):
         AVCODEC = ["-DRECOMP_AVCODEC"] + out_of(["pkg-config", "--cflags", "--libs", "libavcodec", "libavutil"])
     elif WIN and os.path.isfile(os.path.join(WT, "ffmpeg", "lib", "libavcodec.a")):   # Windows: the toolchain's static FFmpeg, H.264 and AAC decoders (runtime/platform/win/setup-toolchain.sh)
         AVCODEC = ["-DRECOMP_AVCODEC", "-I" + os.path.join(WT, "ffmpeg", "include"), os.path.join(WT, "ffmpeg", "lib", "libavcodec.a"), os.path.join(WT, "ffmpeg", "lib", "libavutil.a"), "-lole32", "-luser32", "-lbcrypt"]
