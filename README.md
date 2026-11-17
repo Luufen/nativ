@@ -16,8 +16,8 @@ Generic fixes are also offered upstream as pull requests. Problems with these bu
 A pack is a game's settings file: it tells Nativ how to rebuild that game from your copy, which it recognises by the
 SHA-256 of the game's main program. It holds no game code or data. Upstream's four games are unchanged. Frame rate is the highest the game offers in this fork, widescreen the widest picture it fills (16:9: wider screens get black bars at the sides).
 Version is the game release the pack supports. Every game can render at up to 6× the Vita's 960×544; 4K (4×) was
-checked in the test runs of all of them except Tearaway, LittleBigPlanet and the two Persona Dancing games from
-PersonaDancingRecomp.
+checked in the test runs of all of them except Tearaway, LittleBigPlanet, Resistance: Burning Skies and the two Persona
+Dancing games from PersonaDancingRecomp.
 
 | Game | Title ID | Version | Frame rate | Widescreen | Max resolution |
 |---|---|---|---|---|---|
@@ -51,6 +51,7 @@ PersonaDancingRecomp.
 | Sonic & All-Stars Racing Transformed | PCSB00190 | 1.00 | 30 | 16:9 | 5760×3264 (6×) |
 | Freedom Wars | PCSF00446 | 1.00 | 30 (60 / 120 experimental) | 16:9 (wider experimental) | 5760×3264 (6×) |
 | Silent Hill: Book of Memories | PCSB00115 | 1.00 | not measured yet | not checked yet | 5760×3264 (6×) |
+| Resistance: Burning Skies (US) | PCSA00008 | 1.02 | up to 120 | not checked yet | 5760×3264 (6×) |
 
 Most of these packs were made with the fork's porting tools (below): they hold what Nativ needs to build and boot the
 game from your copy, plus frame-rate and widescreen settings found automatically.
@@ -131,6 +132,10 @@ game from your copy, plus frame-rate and widescreen settings found automatically
 - Many fixes in the recompiler and the emulated system: more ARM and NEON instructions, game modules loaded while
   playing, threads that start again, fibers and timers, more GPU formats and shader forms. These are what get most of
   the games in the table to their menus.
+- **From Tzeentchnet's fork** (their Resistance: Burning Skies work): shader byte operations (I8MAD, SOP2 / SOP3) work
+  on all four colour channels, two-sided stencil, packed render-target views and deferred-lighting fixes, NGS sound
+  buffers that are empty follow on to the next, and an option to skip the game's mission introductions. Their
+  Burning Skies EU (1.02) pack is included as they made it; this fork adds the US release.
 
 **For people porting a game**
 - `vitarecomp pack-init` and `bootstrap` make a first pack for a new game and repeat analysis, build and test until
@@ -139,8 +144,9 @@ game from your copy, plus frame-rate and widescreen settings found automatically
 
 ## Tested
 
-- Windows 11 (x64): Soul Sacrifice Delta, Persona 4: Dancing All Night and Tearaway played from a local build of the
-  same source; every other game above reached its menu in automated test runs.
+- Windows 11 (x64): Soul Sacrifice Delta, Persona 4: Dancing All Night, Tearaway and Resistance: Burning Skies (US
+  1.02, also at 60 and 120 fps) played from a local build of the same source; every other game above reached its
+  menu in automated test runs.
 - Steam Deck: Medieval Defenders and Soul Sacrifice Delta, each exported as an AppImage (`vitarecomp export-appimage`).
 - Android (Samsung Galaxy Tab S7, Android 13): AQUA KITTY DX and Soul Sacrifice Delta, each exported as an `.apk`,
   played by touch with picture, sound and movies.
@@ -192,6 +198,8 @@ The Persona Dancing packs, Vita3K-style texture packs and their renderer fixes c
 [PersonaDancingRecomp](https://github.com/Ecstatic-Magician/PersonaDancingRecomp) by **Ecstatic-Magician**, merged
 with its full history (setup and notes: `packs/PCSE00764/README.md`). [Vita3K](https://github.com/Vita3K/Vita3K) is the
 reference for how many of the Vita's system functions behave.
+Resistance: Burning Skies' EU pack and the fixes it needed come from [Tzeentchnet's fork](https://github.com/Tzeentchnet/nativ)
+by **Tzeentchnet** (taken with their authorship; also offered upstream as their pull request #77).
 
 ---
 
@@ -228,7 +236,6 @@ copy of each game and Sony's firmware update file, and the tools decrypt and rec
 | Game | Release | Title ID | Versions |
 |---|---|---|---|
 | Killzone: Mercenary | US | PCSA00107 | 1.00, 1.12 (recommended: Botzone and online play) |
-| Resistance: Burning Skies | EU | PCSF00141 | 1.02 |
 | Uncharted: Golden Abyss | US | PCSA00029 | 1.00 |
 | Unit 13 | US | PCSA00014 | 1.00 |
 | Shovel Knight | US | PCSE00640 | 1.00 |
@@ -237,10 +244,10 @@ Each game's pack supports exact releases, recognised by the SHA-256 of the game'
 such as Killzone's physics fix or the widescreen cameras, patch code at fixed addresses, so they only fit the build
 they were written for. Your game data doesn't need to match; the main program does.
 
-Other regional editions and versions need their own exact pack entries. The later updates of Uncharted (1.03), Unit
-13 (1.01) and Shovel Knight (1.08, Treasure Trove) are not supported yet. The launcher recognises them and tells you
-which release it supports. It keeps an unsupported update, and the game runs without it. Porting a new release starts
-with `dev/hookmap.py`, which carried 43 of Killzone 1.12's 46 hooks over from 1.00 by matching code.
+Not supported yet: other regions (EU, JP, Asia) and the later updates of Uncharted (1.03), Unit 13 (1.01) and Shovel
+Knight (1.08, Treasure Trove). The launcher recognises them and tells you which release it supports. It keeps an
+unsupported update, and the game runs without it. Porting a new release starts with `dev/hookmap.py`, which carried
+43 of Killzone 1.12's 46 hooks over from 1.00 by matching code.
 
 ## Getting started
 
