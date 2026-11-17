@@ -26,7 +26,7 @@ static inline bool browse_wants(int kind, const std::string &name) {   /* a file
 	const std::string l = browse_lower(name);
 	switch (kind) {
 	case BROWSE_PKG: return browse_ends(l, ".pkg");
-	case BROWSE_LICENCE: return browse_ends(l, ".rif") || l == "work.bin";
+	case BROWSE_LICENCE: return browse_ends(l, ".rif") || l == "work.bin" || browse_ends(l, ".txt");   /* (.txt: a zRIF line) */
 	case BROWSE_PUP: return browse_ends(l, ".pup");
 	case BROWSE_CHEATS: return browse_ends(l, ".psv");
 	default: return false;

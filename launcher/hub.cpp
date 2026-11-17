@@ -716,7 +716,7 @@ static void pick_folder(SDL_Window *w, std::string *target) { if (use_in_app_bro
 /* what each file dialog shows first. A game file is a PKG (vitadecrypt.game reads a file only by a PKG's magic; zip/vpk
  * are not read); a licence is a .rif or a work.bin; the firmware is Sony's .PUP. All files last, for a renamed one */
 static const SDL_DialogFileFilter k_pick_pkg[] = {{"PS Vita game, update or add-on (*.pkg)", "pkg"}, {"All files (*.*)", "*"}};
-static const SDL_DialogFileFilter k_pick_licence[] = {{"Licence file (*.rif, work.bin)", "rif;bin"}, {"All files (*.*)", "*"}};
+static const SDL_DialogFileFilter k_pick_licence[] = {{"Licence file (*.rif, work.bin, zRIF *.txt)", "rif;bin;txt"}, {"All files (*.*)", "*"}};
 static const SDL_DialogFileFilter k_pick_pup[] = {{"PS Vita system update (*.PUP)", "pup"}, {"All files (*.*)", "*"}};
 static const SDL_DialogFileFilter k_pick_psv[] = {{"VitaCheat cheat file (*.psv)", "psv"}, {"All files (*.*)", "*"}};
 static void pick_pkg(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_pkg, 2, BROWSE_PKG); }
@@ -1349,9 +1349,9 @@ static void found_list(void) {
 		ImGui::TextDisabled("%s%s%s%s", kind, x.version.empty() ? "" : " ", x.version.c_str(), x.form == "pkg" ? " (PKG)" : "");
 		found_status(x);
 		if (x.pick && (x.licence == "rif" || ((x.kind == "game" || x.kind == "addon") && x.licence == "no")) && kept_licence(x.content_id).empty()) {
-			ui::dot(ui::warn); ImGui::TextDisabled("Needs its licence file (.rif or work.bin).");
+			ui::dot(ui::warn); ImGui::TextDisabled("Needs its licence file (.rif, work.bin or a zRIF .txt).");
 			licence_help_link();
-			if (path_row("##licfile", x.licence_file, "Its licence file (.rif or work.bin)")) pick_licence(nullptr, &x.licence_file);
+			if (path_row("##licfile", x.licence_file, "Its licence file (.rif, work.bin or a zRIF .txt)")) pick_licence(nullptr, &x.licence_file);
 		} else if (x.pick && x.kind == "update" && x.licence == "no" && !found_ready(x)) {
 			ui::dot(ui::warn); ImGui::TextDisabled("Add its game too: an update decrypts with its game's licence");
 		}
@@ -1469,7 +1469,7 @@ static bool add_form(SDL_Window *win) {   /* a player's own copy -> decrypted, i
 	if (path_row("##addpath", g_add_path, pkg_kind ? "Choose the .pkg file" : "Choose the game folder")) {
 		if (pkg_kind) pick_pkg(win, &g_add_path); else pick_folder(win, &g_add_path);
 	}
-	if (path_row("##lic", g_add_license, pkg_kind ? "Its licence file (.rif or work.bin)" : "Its licence file, if the folder has none (.rif or work.bin)")) pick_licence(win, &g_add_license);
+	if (path_row("##lic", g_add_license, pkg_kind ? "Its licence file (.rif, work.bin or a zRIF .txt)" : "Its licence file, if the folder has none (.rif, work.bin or a zRIF .txt)")) pick_licence(win, &g_add_license);
 	ImGui::Spacing();
 	bool started = false;
 	ImGui::BeginDisabled(g_add_path.empty() || g_task.running);
@@ -3433,8 +3433,8 @@ static void content_modal(void) {
 		ui::dot(ui::accent); ImGui::TextUnformatted(x.name.c_str()); ImGui::SameLine(); ImGui::TextDisabled("found in %s", leaf_name(x.source).c_str());
 		const bool lic = x.licence == "yes" || !x.licence_file.empty() || !kept_licence(x.content_id).empty();
 		if (!lic) {
-			ui::dot(ui::warn); ImGui::TextDisabled("Needs its own licence file (.rif or work.bin).");
-			if (path_row("##lic", x.licence_file, "Its licence file (.rif or work.bin)")) pick_licence(nullptr, &x.licence_file);
+			ui::dot(ui::warn); ImGui::TextDisabled("Needs its own licence file (.rif, work.bin or a zRIF .txt).");
+			if (path_row("##lic", x.licence_file, "Its licence file (.rif, work.bin or a zRIF .txt)")) pick_licence(nullptr, &x.licence_file);
 		}
 		ImGui::BeginDisabled(busy || !lic);
 		if (small_button("Add")) {
@@ -3447,7 +3447,7 @@ static void content_modal(void) {
 	}
 	ImGui::Dummy(ImVec2(0, em * 0.2f));
 	if (path_row("##addonpath", g_addon_path, "An add-on: its PKG, or its folder (ux0:addcont/<title>/<add-on>)")) pick_pkg(nullptr, &g_addon_path);
-	if (path_row("##addonlic", g_addon_lic, "Its licence file (.rif or work.bin), unless it's kept or in the folder")) pick_licence(nullptr, &g_addon_lic);
+	if (path_row("##addonlic", g_addon_lic, "Its licence file (.rif, work.bin or a zRIF .txt), unless it's kept or in the folder")) pick_licence(nullptr, &g_addon_lic);
 	ImGui::BeginDisabled(busy || g_addon_path.empty());
 	if (ImGui::Button("Add the add-on")) {
 		std::vector<std::string> argv = vitarecomp({"add", g_addon_path});

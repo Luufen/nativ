@@ -20,7 +20,7 @@ int main(void) {
 	/* each kind: folders first (no case), then its files; dot- and $-names never */
 	CHECK(names(browse_list(t, BROWSE_FOLDER)) == "Apps/,ux0/");
 	CHECK(names(browse_list(t, BROWSE_PKG)) == "Apps/,ux0/,game.pkg,Update.PKG");
-	CHECK(names(browse_list(t, BROWSE_LICENCE)) == "Apps/,ux0/,licence.rif,work.bin");
+	CHECK(names(browse_list(t, BROWSE_LICENCE)) == "Apps/,ux0/,licence.rif,notes.txt,work.bin");   /* (ZRIF-01: a .txt may hold a zRIF line) */
 	CHECK(names(browse_list(t, BROWSE_PUP)) == "Apps/,ux0/,PSVUPDAT.PUP");
 	CHECK(names(browse_list(t, BROWSE_CHEATS)) == "Apps/,ux0/,PCSB00672.psv");   /* (CHEAT-01) */
 	CHECK(browse_list(t + "/nothing-here", BROWSE_PKG).empty());
@@ -36,6 +36,7 @@ int main(void) {
 	CHECK(browse_parent("/run/media/deck/SD") == "/run/media/deck");
 	CHECK(browse_join("C:/", "Games") == "C:/Games");
 	CHECK(browse_join("/home/deck", "Games") == "/home/deck/Games");
+	CHECK(browse_wants(BROWSE_LICENCE, "Licence.TXT") && !browse_wants(BROWSE_PKG, "licence.txt"));
 	CHECK(browse_wants(BROWSE_LICENCE, "WORK.BIN") && !browse_wants(BROWSE_FOLDER, "game.pkg") && !browse_wants(BROWSE_PKG, "pkg"));
 	printf("file_browse: %d checks, %d failed\n", checks, fails);
 	std::string rm = "rm -rf '" + t + "'"; if (system(rm.c_str())) {}
