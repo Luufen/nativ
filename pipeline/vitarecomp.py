@@ -1302,6 +1302,7 @@ def cmd_export_appimage(T, out, rest):
         for i, kv in enumerate(keep):   # (paths as WSL sees them)
             k, _, v = kv.partition("=")
             if k in ("RUNTIME_FROM", "ATIV_PACKS") and re.match(r"[A-Za-z]:[\\/]", v): keep[i] = f"{k}={wsl_path(v)}"
+        keep.append(f"NATIV_OUT_SHOWN={os.path.abspath(out)}")   # (DECK-SHOWN: the result line names the path as given, not WSL's /mnt/c one: the launcher's "Show in folder")
         return run(["wsl.exe", "-e", "env", f"ATIV_DUMP={wdump}", "PYTHONUTF8=1"] + keep +
                    ["python3", wroot + "/pipeline/vitarecomp.py", "export-appimage", T, wout] + rest, check=False).returncode
     g = Game(T, "export-appimage")
@@ -1344,7 +1345,7 @@ def cmd_export_appimage(T, out, rest):
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
         appimage.pack(stage, rt, out)
     finally: shutil.rmtree(stage, ignore_errors=True)
-    say(f"exported {g.NAME} -> {out} ({os.path.getsize(out) / 1e9:.2f} GB); on the handheld: mark it executable, start it, "
+    say(f"exported {g.NAME} -> {ENV.get('NATIV_OUT_SHOWN') or out} ({os.path.getsize(out) / 1e9:.2f} GB); on the handheld: mark it executable, start it, "
         f"or add it to Steam as a non-Steam game. Its saves and settings: ~/.local/share/ProjectNativ/Exported/{T}")
     say("export: " + appimage.NOTICE)
     return 0
