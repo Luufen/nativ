@@ -33,12 +33,15 @@ void savedlg_ui_build(float w, float hgt) {
 	if (!g_sd_armed && !keys_down(K_OK) && !keys_down(K_BACK)) g_sd_armed = true;
 	const bool ok = g_sd_armed && keys_pressed(K_OK), back = g_sd_armed && keys_pressed(K_BACK);
 	int answer = 0; bool answered = false, moved = false;
-	const float s = w >= 1400 ? 2.0f : 1.0f;   /* (the bitmap font: integer multiples stay crisp) */
+	/* (SAVEDLG-TOUCH) one unit for every size here: the overlay's font size over the 15 px the dialog was laid out at.
+	 * The font already follows the window (ui_scale.h: 720 lines = 1, 1600 lines = 2.2), so the box, its rows and its
+	 * buttons keep the text's proportions at any size. It was a fixed 1 or 2 (a window >= 1400 wide) applied on top of
+	 * that scale as a window font scale: at 2560x1600 (a tablet) the text grew 4.4x while the box only doubled. */
+	const float s = ImGui::GetFontSize() / 15.0f;
 	ImGui::SetNextWindowPos(ImVec2(w * 0.5f, hgt * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImVec2(fminf(w - 32, 520 * s), 0), ImGuiCond_Always);   /* (height 0: fitted every frame) */
 	ImGui::SetNextWindowBgAlpha(0.95f);
 	ImGui::Begin("##savedlg", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
-	ImGui::SetWindowFontScale(s);
 	const ImU32 dim = ImGui::GetColorU32(ImGuiCol_TextDisabled), txt = ImGui::GetColorU32(ImGuiCol_Text);
 	if (kind == SAVEDLG_LIST) {
 		ImGui::TextUnformatted(v.title[0] ? v.title : "Saved data");

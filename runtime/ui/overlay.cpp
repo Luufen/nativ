@@ -2047,6 +2047,11 @@ void overlay_render_forced(SDL_GPUDevice *device, SDL_GPUTexture *target, uint32
 		for (int i = 0; i < 3; i++) forced_frame(device, target, w, h, i == 2, [] { ImGuiIO &io = ImGui::GetIO(); imedlg_ui_build(io.DisplaySize.x, io.DisplaySize.y); });
 		imedlg_close(); imedlg_set_ui_ready(g_has_window); return;
 	}
+	if (!strncmp(ui, "savedlg", 7)) {   /* (SAVEDLG-TOUCH) the save dialog with an example list ("savedlg") or question ("savedlg:yesno"), the on-screen buttons around it */
+		savedlg_demo(strcmp(ui, "savedlg:yesno") ? SAVEDLG_LIST : SAVEDLG_YESNO); g_force_osb = true;
+		for (int i = 0; i < 3; i++) forced_frame(device, target, w, h, i == 2, [] { ImGuiIO &io = ImGui::GetIO(); build_osb(ImGui::GetBackgroundDrawList()); savedlg_ui_build(io.DisplaySize.x, io.DisplaySize.y); });
+		g_force_osb = false; savedlg_demo(SAVEDLG_NONE); return;
+	}
 	if (!strcmp(ui, "quit")) { for (int i = 0; i < 3; i++) forced_frame(device, target, w, h, i == 2, build_quit); return; }   /* (the quit card) */
 	if (!strcmp(ui, "layout")) { for (int i = 0; i < 3; i++) forced_frame(device, target, w, h, i == 2, build_layout); return; }   /* (the layout card: RECOMP_GAME_NAME names the game) */
 	if (!strcmp(ui, "prep")) { g_prep_demo[0] = 1240; g_prep_demo[1] = 5837; g_prep_demo[2] = 372; for (int i = 0; i < 3; i++) forced_frame(device, target, w, h, i == 2, build_prep); g_prep_demo[0] = -1; return; }   /* (the shader prep card, example numbers) */

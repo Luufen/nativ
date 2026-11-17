@@ -47,7 +47,7 @@ void imedlg_ui_build(float w, float hgt) {
 	if (seq != g_seq) { g_seq = seq; snprintf(g_buf, sizeof g_buf, "%s", shown); g_max = mx; g_r = 1; g_c = 0; g_armed = false; g_shift = false; g_focus = true; }
 	if (!g_armed && !any_down()) g_armed = true;
 	int answer = -1;   /* 1 OK, 0 cancel */
-	const float s = w >= 1400 ? 2.0f : 1.0f, em = ImGui::GetFontSize();
+	const float em = ImGui::GetFontSize(), s = em / 15.0f;   /* (SAVEDLG-TOUCH: the box follows the font, which follows the window: ui_scale.h) */
 	ImGui::SetNextWindowPos(ImVec2(w * 0.5f, hgt * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImVec2(fminf(w - 32, 560 * s), 0), ImGuiCond_Always);
 	ImGui::SetNextWindowBgAlpha(0.96f);

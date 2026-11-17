@@ -24,7 +24,7 @@
  *       RECOMP_OVERLAY_DUMP=f.ppm  headless: renders the in-game menu once, open, over the next
  *                           presented frame, into an offscreen texture, and writes it to f -- so the
  *                           menu can be looked at without a screen (see overlay_dump_maybe below)
- *       RECOMP_OVERLAY_DUMP_UI=menu|menu:<tab>|bar|Game|View|Controls|Help|toast|osb|touch:front|touch:rear|intro[:pad|:touch][@<s>]|quit|layout[,...]  what that dump
+ *       RECOMP_OVERLAY_DUMP_UI=menu|menu:<tab>|bar|Game|View|Controls|Help|toast|osb|touch:front|touch:rear|intro[:pad|:touch][@<s>]|quit|layout|savedlg[:yesno][,...]  what that dump
  *                           shows (overlay.h: overlay_render_forced); several, comma-separated, write
  *                           one file each, f_<name>.ppm (':' in a name written as '-')
  *       RECOMP_OVERLAY_DUMP_PAD=ps|xbox|switch  that dump with a virtual controller of that kind attached (the foot's button names)
@@ -47,6 +47,7 @@
 #include "audio_pace.h"
 #include "dump_fit.h"
 #include "touch_controls.h"
+#include "osb_pad.h"   /* (SAVEDLG-TOUCH) the on-screen buttons as a dialog's controller */
 #include "device_pick.h"   /* (UI-02b) the chosen controller by name, else the first */
 #include "intro_skip.h"   /* (INTRO-01) which press ends the first-start touch card */
 #include "kb_bind.h"   /* (KB-MAP) the keyboard's bindings: the table, Vita3K's default keys */
@@ -552,30 +553,67 @@ static void finger_script(void) {
 		p = strchr(p, ';'); if (p) p++;
 	}
 }
-static void screen_finger(const SDL_Event *e) {
-	if (!touch_any() && e->tfinger.touchID != SCRIPT_TOUCH_ID && SDL_GetTouchDeviceType(e->tfinger.touchID) != SDL_TOUCH_DEVICE_DIRECT) return;
-	int w = 0, h = 0; SDL_GetWindowSize(win, &w, &h);
-	const float mx = e->tfinger.x * (float)w, my = e->tfinger.y * (float)h;   /* (SDL's finger positions: 0-1 across the window) */
-	{	/* (UI-01n) a finger on an on-screen button: held there until it lifts, never a touch on the panel */
-		const int shown = window_osb_shown();
-		if (e->type == SDL_EVENT_FINGER_DOWN) osb_touch_last = 1;   /* (auto: from the next frame on they show; this finger is the game's) */
-		for (int j = 0; j < ST_FINGERS; j++) if (osb_fdown[j] && osb_fid[j] == e->tfinger.fingerID) {
-			if (e->type == SDL_EVENT_FINGER_UP || e->type == SDL_EVENT_FINGER_CANCELED) osb_fdown[j] = 0;
-			else {
-				osb_fx[j] = mx; osb_fy[j] = my;
-				if (osb_fctl[j] >= OSB_TRIANGLE && osb_fctl[j] <= OSB_SQUARE) { const int c = osb_hit(&osb_L, mx, my); if (c >= OSB_TRIANGLE && c <= OSB_SQUARE) osb_fctl[j] = c; }   /* (slid onto another face button) */
-			}
-			osb_update(); return;
+static int screen_touch_device(const SDL_Event *e) {   /* a touchscreen's finger (or the script's, or any with RECOMP_TOUCH_ANY) */
+	return touch_any() || e->tfinger.touchID == SCRIPT_TOUCH_ID || SDL_GetTouchDeviceType(e->tfinger.touchID) == SDL_TOUCH_DEVICE_DIRECT;
+}
+/* (UI-01n) a finger on an on-screen button: held there until it lifts, never a touch on the panel. 1: the finger is (or
+ * was, as it lifts) on one -- taken; 0: not theirs */
+static int osb_finger(const SDL_Event *e, float mx, float my, int w, int h) {
+	const int shown = window_osb_shown();
+	if (e->type == SDL_EVENT_FINGER_DOWN) osb_touch_last = 1;   /* (auto: from the next frame on they show; this finger is the game's) */
+	for (int j = 0; j < ST_FINGERS; j++) if (osb_fdown[j] && osb_fid[j] == e->tfinger.fingerID) {
+		if (e->type == SDL_EVENT_FINGER_UP || e->type == SDL_EVENT_FINGER_CANCELED) osb_fdown[j] = 0;
+		else {
+			osb_fx[j] = mx; osb_fy[j] = my;
+			if (osb_fctl[j] >= OSB_TRIANGLE && osb_fctl[j] <= OSB_SQUARE) { const int c = osb_hit(&osb_L, mx, my); if (c >= OSB_TRIANGLE && c <= OSB_SQUARE) osb_fctl[j] = c; }   /* (slid onto another face button) */
 		}
-		if (e->type == SDL_EVENT_FINGER_DOWN && shown) {
-			osb_layout(&osb_L, (float)w, (float)h, osb_size);
-			const int c = osb_hit(&osb_L, mx, my);
-			if (c >= 0) for (int j = 0; j < ST_FINGERS; j++) if (!osb_fdown[j]) {
-				osb_fdown[j] = 1; osb_fid[j] = e->tfinger.fingerID; osb_fctl[j] = c; osb_fx[j] = mx; osb_fy[j] = my;
-				osb_update(); return;
-			}
+		osb_update(); return 1;
+	}
+	if (e->type == SDL_EVENT_FINGER_DOWN && shown) {
+		osb_layout(&osb_L, (float)w, (float)h, osb_size);
+		const int c = osb_hit(&osb_L, mx, my);
+		if (c >= 0) for (int j = 0; j < ST_FINGERS; j++) if (!osb_fdown[j]) {
+			osb_fdown[j] = 1; osb_fid[j] = e->tfinger.fingerID; osb_fctl[j] = c; osb_fx[j] = mx; osb_fy[j] = my;
+			osb_update(); return 1;
 		}
 	}
+	return 0;
+}
+/* (SAVEDLG-TOUCH) while an overlay dialog has the input (overlay_dialog_active: the save dialog, the IME card), the on-screen
+ * buttons are its controller: what they press goes to the overlay as SDL gamepad events (osb_pad.h), the way a real pad's
+ * do. A finger elsewhere is ImGui's pointer there (SDL's touch mouse), so a row or a button can still be tapped. */
+static OsbPadFed osb_dlg_fed;
+static void osb_dlg_button(int button, int down) {
+	SDL_Event ev; SDL_zero(ev); ev.type = down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+	ev.gbutton.button = (Uint8)button; ev.gbutton.down = down != 0; overlay_process_event(&ev);
+}
+static void osb_dlg_axis(int axis, int value) {
+	SDL_Event ev; SDL_zero(ev); ev.type = SDL_EVENT_GAMEPAD_AXIS_MOTION; ev.gaxis.axis = (Uint8)axis; ev.gaxis.value = (Sint16)value;
+	overlay_process_event(&ev);
+}
+static void osb_dlg_feed(void) { osb_pad_feed(&osb_dlg_fed, osb_buttons, osb_stick_on[0], osb_sv[0], osb_sv[1], osb_dlg_button, osb_dlg_axis); }
+static void dialog_finger(const SDL_Event *e) {
+	if (!screen_touch_device(e)) return;
+	int w = 0, h = 0; SDL_GetWindowSize(win, &w, &h);
+	if (osb_finger(e, e->tfinger.x * (float)w, e->tfinger.y * (float)h, w, h)) osb_dlg_feed();
+}
+/* SDL's touch mouse (the first finger as the pointer) over a shown on-screen button: that press is the button's, not a
+ * click on the dialog under it */
+static int dialog_touch_mouse_on_osb(const SDL_Event *e) {
+	float x, y;
+	if (e->type == SDL_EVENT_MOUSE_MOTION && e->motion.which == SDL_TOUCH_MOUSEID) { x = e->motion.x; y = e->motion.y; }
+	else if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN && e->button.which == SDL_TOUCH_MOUSEID) { x = e->button.x; y = e->button.y; }
+	else return 0;
+	if (!window_osb_shown()) return 0;
+	int w = 0, h = 0; SDL_GetWindowSize(win, &w, &h);
+	OsbLayout L; osb_layout(&L, (float)w, (float)h, osb_size);
+	return osb_hit(&L, x, y) >= 0;
+}
+static void screen_finger(const SDL_Event *e) {
+	if (!screen_touch_device(e)) return;
+	int w = 0, h = 0; SDL_GetWindowSize(win, &w, &h);
+	const float mx = e->tfinger.x * (float)w, my = e->tfinger.y * (float)h;   /* (SDL's finger positions: 0-1 across the window) */
+	if (osb_finger(e, mx, my, w, h)) return;
 	int k = -1, free_k = -1;
 	for (int i = 0; i < ST_FINGERS; i++) { if (st_down[i] && st_id[i] == e->tfinger.fingerID) k = i; else if (!st_down[i] && free_k < 0) free_k = i; }
 	if (e->type == SDL_EVENT_FINGER_UP || e->type == SDL_EVENT_FINGER_CANCELED) { if (k >= 0) st_down[k] = 0; return; }
@@ -1249,7 +1287,13 @@ void window_run(void *(*fn)(void *), void *arg) {
 			if (overlay_is_open()) { overlay_process_event(&e); continue; }
 			/* the save-data dialog waiting on the player (overlay_dialog_active): it has the keys and the mouse;
 			 * the game is polling the dialog, not the pad */
-			if (overlay_dialog_active()) { overlay_process_event(&e); continue; }
+			if (overlay_dialog_active()) {
+				/* (SAVEDLG-TOUCH) the on-screen buttons are its controller (dialog_finger); a finger elsewhere reaches it
+				 * as SDL's touch mouse */
+				if (e.type == SDL_EVENT_FINGER_DOWN || e.type == SDL_EVENT_FINGER_MOTION || e.type == SDL_EVENT_FINGER_UP || e.type == SDL_EVENT_FINGER_CANCELED) { dialog_finger(&e); continue; }
+				if (dialog_touch_mouse_on_osb(&e)) continue;
+				overlay_process_event(&e); continue;
+			}
 			/* closed: ImGui still sees the mouse (and the window's focus/enter/leave), so the menu bar can
 			 * show on a hover at the top edge; a press or a move it has claimed (the pointer over the bar,
 			 * a menu or the pull tab, as of the last frame drawn) never becomes a touch below. A release
@@ -1592,7 +1636,7 @@ void window_run(void *(*fn)(void *), void *arg) {
 		{	/* the menu just closed (any way: F10, Escape, a pad combo, its Resume button): the sticks moved
 			 * while it had the events -- a stick let go with the menu up would otherwise stay deflected */
 			static int was_open; int open = overlay_is_open() || overlay_dialog_active();   /* (the save dialog too) */
-			if (open && !was_open) { buttons = 0; touch_down = 0; gamepad_touch_release(); for (int i = 0; i < KB_N; i++) kb_binds[i].held = 0; overlay_input_lost(); }   /* let go of what was held as it opened (and ImGui of what it last saw held) */
+			if (open && !was_open) { buttons = 0; touch_down = 0; gamepad_touch_release(); osb_pad_reset(&osb_dlg_fed);   /* (SAVEDLG-TOUCH: nothing held on them handed over yet) */ for (int i = 0; i < KB_N; i++) kb_binds[i].held = 0; overlay_input_lost(); }   /* let go of what was held as it opened (and ImGui of what it last saw held) */
 			if (was_open && !open) {
 				overlay_input_lost();   /* (a press that closed it -- Cross on Resume -- is released to the game: ImGui must not keep it held) */
 				kb_reload(); pad_reload();   /* (the Controls page may have rebound keys, or the "L and R buttons" swap changed the pad's defaults) */

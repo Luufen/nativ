@@ -37,6 +37,8 @@ void savedlg_release(void);
 /* the player's answer to step `seq` (an answer to a step that has since moved on is dropped): LIST, a row
  * index or SAVEDLG_CANCEL; YESNO, SAVEDLG_YES, SAVEDLG_NO or SAVEDLG_CANCEL */
 void savedlg_answer(int seq, int choice);
+/* (SAVEDLG-TOUCH) an example step for the headless dump (SAVEDLG_LIST / SAVEDLG_YESNO), SAVEDLG_NONE to close it */
+void savedlg_demo(int kind);
 
 #ifdef __cplusplus
 }

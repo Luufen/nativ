@@ -568,6 +568,25 @@ void savedlg_answer(int seq, int choice) {
 	if (sd.open && seq == sd.seq && sd.status == ST_RUNNING && sd.sub == ST_RUNNING) sd_answer(choice);
 	pthread_mutex_unlock(&sd_mu);
 }
+/* (SAVEDLG-TOUCH) RECOMP_OVERLAY_DUMP_UI=savedlg|savedlg:yesno: an example step for a headless picture of the dialog, and
+ * (kind SAVEDLG_NONE) the dialog closed again. Example text only: the dump never runs while a game's dialog is open. */
+void savedlg_demo(int kind) {
+	pthread_mutex_lock(&sd_mu);
+	memset(&sd, 0, sizeof sd);
+	if (kind == SAVEDLG_LIST || kind == SAVEDLG_YESNO) {
+		sd.open = 1; sd.status = ST_RUNNING; sd.sub = ST_RUNNING; sd.kind = kind; static int demo_seq; sd.seq = 0x7fff0000 + ++demo_seq; sd.disp = 1; sd.percent = -1;
+		snprintf(sd.title, sizeof sd.title, "Save");
+		snprintf(sd.msg, sizeof sd.msg, "Do you want to overwrite this saved data?");
+		static const char *const names[3] = {"New Saved Data", "Example save 1", "Example save 2"};
+		for (int i = 0; i < 3; i++) {
+			SaveDlgRow *r = &sd.rows[i]; r->id = (uint32_t)i; r->exists = i > 0;
+			snprintf(r->title, sizeof r->title, "%s", names[i]);
+			if (i) { snprintf(r->sub, sizeof r->sub, "Chapter %d  -  Level %d", i, 10 * i); snprintf(r->detail, sizeof r->detail, "Play time %d:%02d", 3 * i, 7 * i); snprintf(r->date, sizeof r->date, "2026-11-1%d 20:0%d", i, i); }
+		}
+		sd.nrows = 3;
+	}
+	pthread_mutex_unlock(&sd_mu);
+}
 
 /* ---- trophies: trophy.c (HLE-LIB-02) */
 

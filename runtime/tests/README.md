@@ -216,6 +216,23 @@ cancels on Circle, and keeps its arm rule (a key already held when the step appe
 It prints `all passed (8 ok)` and exits 0. `-DAPPUTIL_UNDER_TEST='\"<file>\"'` / `-DSAVEDLG_UI_UNDER_TEST='\"<file>\"'`
 compile against different copies for fail-before comparisons.
 
+## The save dialog on a touch screen: `savedlg_touch_test.cpp`
+
+SAVEDLG-TOUCH (a tablet report: the save dialog's text did not fit the screen, and the on-screen buttons did not operate
+it). Part A sets the overlay's scale for 960x544, 1920x1080 and 2560x1600 (ui_scale.h) and checks the real dialog: its text
+is the menu's size and its box keeps the 960x544 proportions (520 px at a 15 px font, 34.7 em). Part B lays the on-screen
+buttons out for 2560x1600 (touch_controls.h), puts fingers on them and hands what they press to the dialog through
+window.c's feed (osb_pad.h -> `savedlg_ui_gamepad_button/axis`): Cross chooses, the D-pad and the left stick move,
+Circle backs out, in the list and in a yes/no question. Case B1 is the host as it was (the finger not fed): unanswered.
+Fail-before against the pre-fix savedlg_ui.cpp (`-DSAVEDLG_UI_UNDER_TEST`): `4 checks FAILED` (the text 2x the menu's at
+1920x1080 and 2560x1600, the box 23.1 / 15.5 em), exit 1.
+
+    c++ -O1 -g -w -D_GNU_SOURCE -std=c++17 $INC -I ../../third_party/imgui -I $SDL3_INC savedlg_touch_test.cpp \
+        ../../third_party/imgui/imgui.cpp ../../third_party/imgui/imgui_draw.cpp ../../third_party/imgui/imgui_tables.cpp \
+        ../../third_party/imgui/imgui_widgets.cpp -o /tmp/savedlg_touch_test -lpthread && /tmp/savedlg_touch_test
+
+It prints `all passed (18 ok)` and exits 0.
+
 ## The full menu answers the whole controller: `menu_pad_test.cpp`
 
 U12c (owner, 2026-11-07: "the whole menu is not controllable by controller"): the host's pad feed
