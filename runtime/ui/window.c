@@ -627,6 +627,9 @@ static void screen_finger(const SDL_Event *e) {
 }
 
 int window_active(void) { return active; }
+/* (local-forkport2) gfx_gpu.c asks whether the GPU frame is presented directly: always here -- Tzeentchnet's SDL renderer
+ * presentation backend (aae1d93), whose software path answers 0, is not taken over */
+int window_gpu_direct_present(void) { return 1; }
 
 static SDL_GPUDevice *gpu;
 void *window_gpu_device(void) { return gpu; }   /* for a future gfx_gpu.c */
