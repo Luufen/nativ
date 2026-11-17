@@ -331,6 +331,19 @@ own record: these imports were logged `not implemented -- returns 0`.
 
 It prints `all passed` and exits 0.
 
+## I8MAD on the packed word: `usse_i8mad_test.c`
+
+I8MAD's four U8 lanes are one packed word in and out (docs/usse-isa.md 3.12). Its operands are decoded TY_U8, and the
+interpreter read and wrote them with that type: lane 0 alone, so green, blue and alpha came out 0, and src0's negate
+(which only selects subtract) negated the read too. The fixture hand-encodes five I8MAD words (every addend select, the
+alpha replacement of either factor, subtract), decodes them with the real decoder, runs the interpreter against an
+oracle computed from the packed words, and checks that the SPIR-V translator takes each program. Against the pre-fix
+usse.c / usse_spirv.c: `15 checks, 5 failed` (the interpreter's word, one per case), exit 1.
+
+    cc -O1 -g -Wall -D_GNU_SOURCE -I ../gfx -I ../core -I ../../recompiler -I ../.. usse_i8mad_test.c ../gfx/usse.c ../gfx/usse_spirv.c -o /tmp/usse_i8mad_test -lm && /tmp/usse_i8mad_test
+
+It prints `15 checks, 0 failed` and exits 0.
+
 ## Branches and loops on the GPU: `usse_cf_test.c`
 
 NIGHT-01 USSE-CF: `usse_spirv.c` turned only predicated forward skips into structured SPIR-V; an if/else (a skip range
