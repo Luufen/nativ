@@ -11,142 +11,104 @@ from a Vita you own, and Sony's firmware update file.
 Generic fixes are also offered upstream as pull requests. Problems with these builds belong in
 [this fork's issues](https://github.com/Luufen/nativ---Updated-30-games-120-widescreen/issues), not upstream's.
 
-## Games this fork has packs for
+## Tested games
 
 A pack is a game's settings file: it tells Nativ how to rebuild that game from your copy, which it recognises by the
 SHA-256 of the game's main program. It holds no game code or data. Upstream's four games are unchanged. Frame rate is the highest the game offers in this fork, widescreen the widest picture it fills (16:9: wider screens get black bars at the sides).
-Version is the game release the pack supports. Every game can render at up to 6× the Vita's 960×544; 4K (4×) was
+Version is the game release the pack supports. Tested: Yes if this fork ran the game, played or in automated test runs. Every game can render at up to 6× the Vita's 960×544; 4K (4×) was
 checked in the test runs of all of them except Tearaway, LittleBigPlanet, Resistance: Burning Skies and the two Persona
 Dancing games from PersonaDancingRecomp.
 
-| Game | Title ID | Version | Frame rate | Widescreen | Max resolution |
-|---|---|---|---|---|---|
-| Soul Sacrifice Delta (EU) | PCSF00532 | 1.00 | up to 120 | up to 21:9 | 5760×3264 (6×) |
-| Persona 4: Dancing All Night (US) | PCSE00764 | 1.00, 1.01 | 30 | up to 21:9 | 5760×3264 (6×) |
-| Persona 3: Dancing in Moonlight (US) | PCSE01274 | 1.00 | 60 | not tested | 5760×3264 (6×) |
-| Persona 5: Dancing in Starlight (US) | PCSE01275 | 1.00 | 60 | not tested | 5760×3264 (6×) |
-| Uncharted: Golden Abyss (EU) | PCSF00001 | 1.00 | up to 120 | up to 21:9 | 5760×3264 (6×) |
-| Tearaway | PCSF00476 | 1.00 | 30 | not checked yet | 5760×3264 (6×) |
-| Medieval Defenders | PCSB00672 | 1.00 | up to 120 | 16:9 | 5760×3264 (6×) |
-| Persona 4 Golden | PCSB00245 | 1.00 | 30 | up to 21:9 | 5760×3264 (6×) |
-| Invizimals: Hidden Challenges | PCSF00415 | 1.00 | up to 120 | up to 21:9 | 5760×3264 (6×) |
-| Invizimals: The Resistance | PCSF00510 | 1.00 | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
-| Killzone: Mercenary (EU) | PCSF00243 | 1.00 | up to 120 | 16:9 | 5760×3264 (6×) |
-| WipEout 2048 | PCSD00005 | 1.00 | up to 120 | up to 21:9 | 5760×3264 (6×) |
-| LittleBigPlanet | PCSA00017 | 1.00 | 30 | not checked yet | 5760×3264 (6×) |
-| Gravity Rush | PCSF00024 | 1.00 | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
-| Ratchet & Clank Trilogy | PCSF00482 | 1.00 | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
-| PlayStation All-Stars Battle Royale | PCSF00153 | 1.00 | 60, slower in busy scenes | 16:9 | 5760×3264 (6×) |
-| Injustice: Gods Among Us Ultimate Edition | PCSB00356 | 1.00 | 60 | 16:9 | 5760×3264 (6×) |
-| Street Fighter X Tekken | PCSB00144 | 1.00 | 60 | 16:9 | 5760×3264 (6×) |
-| J-Stars Victory VS+ | PCSE00595 | 1.00 | 60 | 16:9 | 5760×3264 (6×) |
-| God Eater Resurrection | PCSB00874 | 1.00 | 30 | not checked yet | 5760×3264 (6×) |
-| God Eater 2 Rage Burst | PCSB00875 | 1.00 | 30 | 16:9 | 5760×3264 (6×) |
-| Call of Duty: Black Ops Declassified (Russian) | PCSB00232 | 1.00 | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
-| LEGO Ninjago: Nindroids | PCSB00500 | 1.00 | up to 120 | 16:9 | 5760×3264 (6×) |
-| XCOM: Enemy Unknown Plus | PCSB00742 | 1.00 | 30 | 16:9 | 5760×3264 (6×) |
-| Batman: Arkham Origins Blackgate | PCSB00353 | 1.00 | up to 120 | 16:9 | 5760×3264 (6×) |
-| Rayman Legends (Chinese) | PCSH00118 | 1.00 | up to 120 | up to 21:9 | 5760×3264 (6×) |
-| Toukiden Kiwami (Chinese) | PCSH00110 | 1.00 | 60 | 16:9 | 5760×3264 (6×) |
-| Sonic & All-Stars Racing Transformed | PCSB00190 | 1.00 | 30 | 16:9 | 5760×3264 (6×) |
-| Freedom Wars | PCSF00446 | 1.00 | 30 (60 / 120 experimental) | 16:9 (wider experimental) | 5760×3264 (6×) |
-| Silent Hill: Book of Memories | PCSB00115 | 1.00 | not measured yet | not checked yet | 5760×3264 (6×) |
-| Resistance: Burning Skies (US) | PCSA00008 | 1.02 | up to 120 | not checked yet | 5760×3264 (6×) |
+| Game | Title ID | Version | Tested | Frame rate | Widescreen | Max resolution |
+|---|---|---|---|---|---|---|
+| Soul Sacrifice Delta (EU) | PCSF00532 | 1.00 | Yes | up to 120 | up to 21:9 | 5760×3264 (6×) |
+| Persona 4: Dancing All Night (US) | PCSE00764 | 1.00, 1.01 | Yes | 30 | up to 21:9 | 5760×3264 (6×) |
+| Persona 3: Dancing in Moonlight (US) | PCSE01274 | 1.00 | No | 60 | not tested | 5760×3264 (6×) |
+| Persona 5: Dancing in Starlight (US) | PCSE01275 | 1.00 | No | 60 | not tested | 5760×3264 (6×) |
+| Uncharted: Golden Abyss (EU) | PCSF00001 | 1.00 | Yes | up to 120 | up to 21:9 | 5760×3264 (6×) |
+| Tearaway | PCSF00476 | 1.00 | Yes | 30 | not checked yet | 5760×3264 (6×) |
+| Medieval Defenders | PCSB00672 | 1.00 | Yes | up to 120 | 16:9 | 5760×3264 (6×) |
+| Persona 4 Golden | PCSB00245 | 1.00 | Yes | 30 | up to 21:9 | 5760×3264 (6×) |
+| Invizimals: Hidden Challenges | PCSF00415 | 1.00 | Yes | up to 120 | up to 21:9 | 5760×3264 (6×) |
+| Invizimals: The Resistance | PCSF00510 | 1.00 | Yes | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
+| Killzone: Mercenary (EU) | PCSF00243 | 1.00 | Yes | up to 120 | 16:9 | 5760×3264 (6×) |
+| WipEout 2048 | PCSD00005 | 1.00 | Yes | up to 120 | up to 21:9 | 5760×3264 (6×) |
+| LittleBigPlanet | PCSA00017 | 1.00 | Yes | 30 | not checked yet | 5760×3264 (6×) |
+| Gravity Rush | PCSF00024 | 1.00 | Yes | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
+| Ratchet & Clank Trilogy | PCSF00482 | 1.00 | Yes | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
+| PlayStation All-Stars Battle Royale | PCSF00153 | 1.00 | Yes | 60, slower in busy scenes | 16:9 | 5760×3264 (6×) |
+| Injustice: Gods Among Us Ultimate Edition | PCSB00356 | 1.00 | Yes | 60 | 16:9 | 5760×3264 (6×) |
+| Street Fighter X Tekken | PCSB00144 | 1.00 | Yes | 60 | 16:9 | 5760×3264 (6×) |
+| J-Stars Victory VS+ | PCSE00595 | 1.00 | Yes | 60 | 16:9 | 5760×3264 (6×) |
+| God Eater Resurrection | PCSB00874 | 1.00 | Yes | 30 | not checked yet | 5760×3264 (6×) |
+| God Eater 2 Rage Burst | PCSB00875 | 1.00 | Yes | 30 | 16:9 | 5760×3264 (6×) |
+| Call of Duty: Black Ops Declassified (Russian) | PCSB00232 | 1.00 | Yes | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
+| LEGO Ninjago: Nindroids | PCSB00500 | 1.00 | Yes | up to 120 | 16:9 | 5760×3264 (6×) |
+| XCOM: Enemy Unknown Plus | PCSB00742 | 1.00 | Yes | 30 | 16:9 | 5760×3264 (6×) |
+| Batman: Arkham Origins Blackgate | PCSB00353 | 1.00 | Yes | up to 120 | 16:9 | 5760×3264 (6×) |
+| Rayman Legends (Chinese) | PCSH00118 | 1.00 | Yes | up to 120 | up to 21:9 | 5760×3264 (6×) |
+| Toukiden Kiwami (Chinese) | PCSH00110 | 1.00 | Yes | 60 | 16:9 | 5760×3264 (6×) |
+| Sonic & All-Stars Racing Transformed | PCSB00190 | 1.00 | Yes | 30 | 16:9 | 5760×3264 (6×) |
+| Freedom Wars | PCSF00446 | 1.00 | Yes | 30 (60 / 120 experimental) | 16:9 (wider experimental) | 5760×3264 (6×) |
+| Silent Hill: Book of Memories | PCSB00115 | 1.00 | Yes | not measured yet | not checked yet | 5760×3264 (6×) |
+| Resistance: Burning Skies (US) | PCSA00008 | 1.02 | Yes | up to 120 | not checked yet | 5760×3264 (6×) |
 
 Most of these packs were made with the fork's porting tools (below): they hold what Nativ needs to build and boot the
 game from your copy, plus frame-rate and widescreen settings found automatically.
 
+Other games may work out of the box but are untested: when you add a game that has no pack, the launcher writes a
+first one for it and builds it. Some games then reach their menus or play (AQUA KITTY DX was played this way on
+Android); others stop at a missing function or a feature Nativ doesn't have yet.
+
 ## What's new compared with Project Nativ v0.1.5
 
-**The launcher**
-- Works with a controller alone or a touch screen alone: D-pad and buttons reach everything, finger-sized targets,
-  swiping, its own file browser and on-screen keyboard.
-- A library page (sorted by state, play time and size, with real game names) and a page for each game.
-- Finds games in other folders and drives (including a Vita3K installation) and can play them where they are.
-- Add or remove a game in Steam, also from the Steam Deck's Game Mode.
-- Export a built game for your own use: a folder for another Windows PC, an AppImage for your Steam Deck, or an app
-  (`.apk`) for your own Android phone or tablet (64-bit, Android 10 or newer; touch with on-screen buttons, or a
-  controller; Back opens the in-game menu). A game over 1.5 GB gets a second file, `<name>-data.zip`, to copy along and
-  choose at its first start. The Steam Deck and Android exports are built in WSL on Windows and need their toolchain
-  once: `bash runtime/platform/linux/setup-toolchain.sh` or `bash runtime/platform/android/setup-toolchain.sh` there.
-- A licence can also be a zRIF line: pick a `.txt` file holding it where the launcher asks for a `.rif` / `work.bin`
-  (or give that file to `--license`); importing licences and decrypting PKGs read it too.
-- **Updates & add-ons** on each game's page: which version you play and which update is recommended; add, replace or
-  remove an update (the game is built again), and add or remove add-ons (DLC) from their PKG or folder and licence
-  (nothing is built). A game sees only the add-ons you added as installed; before, it was told every add-on it asked
-  for was there.
-- **Cheats** on each game's page: pick a VitaCheat cheat file (`.psv`) for the game and tick which cheats are on.
-- Fits any window size and fullscreen; menus in English and German.
-- A title with no pack gets a first one when you add it (the system modules it needs), instead of a build that stops
-  at once. Copied and saved logs, and bug reports, leave out your user folder and account IDs.
+**Games**
+- **31 more games** than upstream's 4 (see [Tested games](#tested-games)): all render at **up to 6× the Vita's
+  resolution (4K and beyond)**, 10 of them run at **up to 120 fps** and 7 fill **21:9** widescreen.
+- **A game without a pack still gets a start:** adding it writes a first pack automatically.
 
-**In the game (F10, or Start + Select on a controller)**
-- The menu's sections are tabs along the top, and every setting works the same way with a controller: move with the
-  D-pad, Cross to change, Circle to cancel.
-- Button remapping on a drawn controller, stick sensitivity and dead zone, and a choice of which controller and which
-  camera to use.
-- **Every Vita and PS TV button on the keyboard and the controller**, with Vita3K's default keys (right stick on
-  I J K L, the PS button on P). The mapping reads "Vita button -> your controller's button" with the names printed on
-  your pad (LT / LB / A or L2 / L1 / Cross), in groups, and the touch screen buttons have a group of their own.
-- On-screen buttons for playing by touch, and a badge that shows which of the Vita's touch panels the controller is
-  driving.
-- A start hint names every way to open the menu: keyboard, controller and touch.
-- **L and R in games that read the pad through the "2" functions** now arrive as the Vita sends them there (L1 / R1,
-  as in Vita3K): before, such games never saw L or R from the keyboard or the controller.
-- **System fonts:** `vitarecomp fonts <folder>` copies the console's system fonts (`sa0:data/font/pvf`, from a Vita3K
-  install or its `sa0` folder) into the library; games that draw text with them (Freedom Wars) need it, others are
-  unchanged.
-- **Instanced draws** (`sceGxmDrawInstanced`) are drawn per instance, each with its own per-instance data: before,
-  such geometry was torn across the screen or black.
-- **The on-screen keyboard without a window** answers like the card does, so a game that fills its text buffer after
-  the dialog starts gets the name typed.
-- **Shader subroutines:** a shader that calls a routine at the start of its code (a return, then branches back to it)
-  is run in the right order and drawn on the GPU. Before, each call ran as a jump back to the start: such draws went to
-  the CPU and took seconds each (Silent Hill: Book of Memories' title screen and menus).
-- **Memory blocks keep the console's budget:** a game that probes how much memory it can take gets the Vita's answer
-  instead of the PC's, and freed blocks are reused for aligned requests.
-- **Touch reads report the sample of the frame they are in**, and the blocking read only new ones: a game that
-  drains the touch buffer until it is empty no longer loops forever at its first touch check.
-- The in-game menu opens only with F10, Select + Start or the PS button; resting the mouse at the top edge no longer
-  slides a menu bar down.
-- **Game language:** Auto (your computer's language) or any of the Vita's 20 languages, also in the launcher's
-  Settings. Games that follow the Vita's system language show their text, and often their voices, in it.
-- A full performance overlay (F1): frame times, lows, CPU and GPU load, memory.
-- **Cheats:** the menu's Game tab has a switch for each cheat of the game's cheat file; the cheats that are on are
-  applied every frame. VitaCheat's code types are read (writes, copies, pointers, button conditions, module-relative
-  addresses); cheats that would patch the game's code can't work in a recompiled game and are marked unsupported.
+**Launcher**
+- **Works with a controller or a touch screen alone**: every page, its own file browser and on-screen keyboard.
+- **Library** with a page per game; finds games in other folders and drives, including a **Vita3K** installation.
+- **Updates, add-ons (DLC) and cheats** per game; **zRIF licences** accepted wherever a `.rif` is asked for.
+- **Export** a built game for your own devices: **another Windows PC**, a **Steam Deck** (AppImage) or an **Android**
+  phone or tablet (`.apk`). Steam Deck and Android builds run in WSL on Windows and need a one-time toolchain setup
+  (`runtime/platform/linux/setup-toolchain.sh`, `runtime/platform/android/setup-toolchain.sh`).
+- **Add to Steam**, also from the Steam Deck's Game Mode. English and German; any window size or fullscreen.
+- Logs and bug reports leave out your user folder and account IDs.
 
-**Picture and speed**
-- Up to 120 fps and widescreen (16:10, 21:9 and more) in more games, and 4K rendering.
+**In the game** (F10, Start + Select, or the PS button)
+- **Every Vita and PS TV button on keyboard and controller**, remappable on a drawn controller, with the names printed
+  on your pad.
+- **On-screen buttons for touch play**; stick sensitivity and dead zone; which controller and camera to use.
+- **Game language**: your computer's or any of the Vita's 20.
+- **Cheats** (VitaCheat `.psv` files) switched on and off while playing.
+- **Performance overlay** (F1): frame times, CPU and GPU load, memory.
 
-**Sound and movies**
-- ATRAC9 and AAC audio, movies that play their soundtrack, smoother sound with small audio buffers, and fixes for
-  games using FMOD.
+**Picture and sound**
+- **120 fps, widescreen and 4K** in more games.
+- **ATRAC9 and AAC audio**, movies with their soundtrack, smoother sound, fixes for games using FMOD.
+- Many GPU fixes: instanced draws, shader subroutines, more texture and render-target formats.
 
 **The Vita's hardware, without a Vita**
-- Your webcam stands in for the Vita's camera (or a virtual lamp, F7); a controller's gyro for the motion sensor.
-- Trophies work offline, with a note when you earn one. Text input, messages and other system dialogs ask you on screen.
-- Games that expect a network see a Vita that is offline; nothing goes online.
+- **Webcam as the Vita's camera**, a controller's gyro as its motion sensor.
+- **Trophies offline**, with a note when you earn one; text input and system dialogs on screen.
+- Games that expect a network see an offline Vita; nothing goes online.
 
 **Compatibility**
-- Many fixes in the recompiler and the emulated system: more ARM and NEON instructions, game modules loaded while
-  playing, threads that start again, fibers and timers, more GPU formats and shader forms. These are what get most of
-  the games in the table to their menus.
-- **From Tzeentchnet's fork** (their Resistance: Burning Skies work): shader byte operations (I8MAD, SOP2 / SOP3) work
-  on all four colour channels, two-sided stencil, packed render-target views and deferred-lighting fixes, NGS sound
-  buffers that are empty follow on to the next, and an option to skip the game's mission introductions. Their
-  Burning Skies EU (1.02) pack is included as they made it; this fork adds the US release.
+- **Many recompiler and system fixes**: more ARM and NEON instructions, game modules loaded while playing, threads,
+  fibers, timers, the console's memory budget and its system fonts. These get most of the tested games to their menus.
+- **From Tzeentchnet's fork**: **Resistance: Burning Skies** and the fixes it needed (shader byte operations on all
+  four colour channels, two-sided stencil, deferred lighting, NGS sound buffers, an option to skip mission intros).
 
 **For people porting a game**
-- `vitarecomp pack-init` and `bootstrap` make a first pack for a new game and repeat analysis, build and test until
-  no new code turns up; `hooks-scan` suggests frame-rate and widescreen settings.
-- Every test run ends with a list of what the game asked for that Nativ doesn't do yet.
+- **`vitarecomp bootstrap`** builds and tests a new game until no new code turns up; **`hooks-scan`** suggests
+  frame-rate and widescreen settings; every test run lists what the game asked for that Nativ doesn't do yet.
 
 ## Tested
 
 - Windows 11 (x64): Soul Sacrifice Delta, Persona 4: Dancing All Night, Tearaway and Resistance: Burning Skies (US
-  1.02, also at 60 and 120 fps) played from a local build of the same source; every other game above reached its
-  menu in automated test runs.
+  1.02, also at 60 and 120 fps) played from a local build of the same source; for every game, see the Tested column above.
 - Steam Deck: Medieval Defenders and Soul Sacrifice Delta, each exported as an AppImage (`vitarecomp export-appimage`).
 - Android (Samsung Galaxy Tab S7, Android 13): AQUA KITTY DX and Soul Sacrifice Delta, each exported as an `.apk`,
   played by touch with picture, sound and movies.
