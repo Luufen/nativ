@@ -224,6 +224,10 @@ is the menu's size and its box keeps the 960x544 proportions (520 px at a 15 px 
 buttons out for 2560x1600 (touch_controls.h), puts fingers on them and hands what they press to the dialog through
 window.c's feed (osb_pad.h -> `savedlg_ui_gamepad_button/axis`): Cross chooses, the D-pad and the left stick move,
 Circle backs out, in the list and in a yes/no question. Case B1 is the host as it was (the finger not fed): unanswered.
+Every frame models a device with no controller: ImGui's SDL3 backend clears `ImGuiBackendFlags_HasGamepad`, then
+render_frame's `savedlg_ui_gamepad_frame(SDL_HasGamepad() || window_osb_shown())` sets it again while the on-screen
+buttons show. `-DOSB_KEEPS_GAMEPAD=0` (render_frame with `SDL_HasGamepad()` only, the first fix's state that the owner
+found still dead on the tablet): `7 checks FAILED` (B2-B8: ImGui wipes the keys they press), exit 1.
 Fail-before against the pre-fix savedlg_ui.cpp (`-DSAVEDLG_UI_UNDER_TEST`): `4 checks FAILED` (the text 2x the menu's at
 1920x1080 and 2560x1600, the box 23.1 / 15.5 em), exit 1.
 

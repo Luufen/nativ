@@ -1369,6 +1369,7 @@ static void build_perf_full(ImDrawList *dl) {
 /* (UI-01n) the on-screen buttons (touch_controls.h, the layout window.c presses by): translucent, a held one lit; the
  * face buttons as the Vita's shapes, the D-pad's arms lit by direction, a stick's knob under its finger */
 extern "C" int window_osb_state(float *size, unsigned *held, unsigned *bits, float knob[4]);
+extern "C" int window_osb_shown(void);   /* (SAVEDLG-TOUCH: they are a pad for the dialogs: render_frame keeps the gamepad flag while they show) */
 static bool g_force_osb;   /* RECOMP_OVERLAY_DUMP_UI=osb: shown, nothing held */
 static void build_osb(ImDrawList *dl) {
 	float size = 1.0f, knob[4] = {0, 0, 0, 0}; unsigned held = 0, bits = 0;
@@ -1624,7 +1625,7 @@ static void render_frame(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, uint
 	ImGui_ImplSDLGPU3_NewFrame();
 	if (have_window) {
 		ImGui_ImplSDL3_NewFrame();
-		savedlg_ui_gamepad_frame(SDL_HasGamepad());   /* (U12c) after the backend cleared the flag: a pad keeps it */
+		savedlg_ui_gamepad_frame(SDL_HasGamepad() || window_osb_shown());   /* (U12c) after the backend cleared the flag: a pad keeps it -- and (SAVEDLG-TOUCH) the on-screen buttons while they show: on a tablet with no pad the backend clears it every frame, and ImGui then wiped the keys they press */
 	} else {
 		io.DisplaySize = ImVec2((float)w, (float)h);
 		io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);

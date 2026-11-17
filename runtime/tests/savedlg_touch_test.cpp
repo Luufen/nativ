@@ -63,10 +63,20 @@ static void set_window(float w, float h) {   /* the overlay's own scale for that
 	g_w = w; g_h = h;
 	ImGui::GetStyle().FontSizeBase = 15.0f * overlay_ui_scale(h, 1.0f);
 }
+/* (round 2, the owner's check of the first fix: the on-screen buttons still did nothing on the tablet) the frame as
+ * overlay.cpp's render_frame runs it on a device with NO controller: ImGui's SDL3 backend clears HasGamepad every frame
+ * (its pad list is empty), then render_frame calls savedlg_ui_gamepad_frame(SDL_HasGamepad() || window_osb_shown()) --
+ * here 0 || 1, the on-screen buttons showing. -DOSB_KEEPS_GAMEPAD=0: render_frame as it was (SDL_HasGamepad() only):
+ * ImGui::NewFrame wipes every gamepad key the on-screen buttons pressed (imgui.cpp "Clear gamepad data if disabled"). */
+#ifndef OSB_KEEPS_GAMEPAD
+#define OSB_KEEPS_GAMEPAD 1
+#endif
 static void frame(void) {
 	ImGuiIO &io = ImGui::GetIO();
 	io.DisplaySize = ImVec2(g_w, g_h);
 	io.DeltaTime = 1.0f / 60.0f;
+	io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;   /* ImGui_ImplSDL3_NewFrame -> UpdateGamepads, no pad */
+	savedlg_ui_gamepad_frame(0 /* SDL_HasGamepad() */ || OSB_KEEPS_GAMEPAD /* window_osb_shown() */);
 	ImGui::NewFrame();
 	savedlg_ui_build(g_w, g_h);
 	ImGui::Render();
