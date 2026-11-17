@@ -29,6 +29,10 @@
                                             handheld (a Steam Deck; pipeline/appimage.py): compiled once more for its
                                             processor (EXPORT_CPU, default znver2) as <base>_deck, packed with the
                                             game's images and app0 -- private: it holds the game. On Windows: in WSL
+  vitarecomp export-apk <title> <out.apk> [--abi arm64|x86_64|all]   a built game as an APK for the player's OWN
+                                            Android device (pipeline/apk.py): compiled for Android (arm64: a device,
+                                            x86_64: the emulator), packed with the game's images, signed with the
+                                            player's own key; app0 goes to the device apart (adb push) -- private. In WSL
   vitarecomp export-win <title> <out-folder> [--cpu LEVEL] [--zip] [--camera light|webcam|dark]   a built game as a folder for the
                                             player's OWN other Windows PCs (pipeline/portable.py): compiled once
                                             more for a CPU level other PCs have (default x86-64-v3; native and
@@ -128,6 +132,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zlib
@@ -136,6 +141,7 @@ R = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(R)   # (p
 RECOMPILER, RUNTIME, PACKS, DECRYPT, DEV = (os.path.join(ROOT, d) for d in ("recompiler", "runtime", "packs", "decrypt", "dev"))
 PACKS = os.environ.get("ATIV_PACKS") or PACKS   # (ATIV_PACKS=<dir>: the packs read from there -- a game run as if it had none, bootstrap's test)
 sys.path.insert(0, R)
+import apk  # noqa: E402
 import appimage  # noqa: E402
 import portable  # noqa: E402
 import bootstrap  # noqa: E402
@@ -1342,6 +1348,84 @@ def cmd_export_appimage(T, out, rest):
     return 0
 
 
+def cmd_export_apk(T, out, rest):
+    """the game as an APK for the player's own Android device (pipeline/apk.py; EXPORT-APK): its code as it is (made by the
+    launcher's Build: nothing is recompiled) compiled for Android (runtime/build.py TARGET=android-<abi>: arm64 for a
+    device, x86_64 for the emulator), packed with the game's images and signed with the player's own key (made once:
+    <library>/android/export.keystore). app0 is not in it: it goes to the device's Android/data/<package>/files/fs/app0.
+    On Windows it all runs in WSL (the Android toolchain: ATIV_ANDROID_TOOLCHAIN, else ~/toolchains/ativ-android, made by
+    runtime/platform/android/setup-toolchain.sh)"""
+    if not out.endswith(".apk"): die("export-apk: the output is a file named <something>.apk")
+    abis = ["arm64"]
+    it = iter(rest)
+    for a in it:
+        if a == "--abi":
+            v = next(it, "")
+            abis = list(apk.ABIS) if v == "all" else [v]
+            if any(x not in apk.ABIS for x in abis): die(f"export-apk: --abi {v}: arm64 (a device), x86_64 (the emulator) or all")
+        else: die(f"export-apk: unknown option {a} (--abi arm64|x86_64|all)")
+    say("export: " + apk.NOTICE)
+    if WINDOWS:
+        say("export: running in WSL (the Android build and the packing)")
+        try: wroot, wdump, wout = wsl_path(ROOT), wsl_path(DUMP), wsl_path(os.path.abspath(out))
+        except (OSError, subprocess.CalledProcessError): die("export-apk: needs WSL (wsl.exe) on Windows")
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        keep = [f"{k}={ENV[k]}" for k in ("JOBS", "ATIV_ANDROID_TOOLCHAIN", "ATIV_PACKS") if ENV.get(k)]
+        for i, kv in enumerate(keep):   # (paths as WSL sees them)
+            k, _, v = kv.partition("=")
+            if k == "ATIV_PACKS" and re.match(r"[A-Za-z]:[\\/]", v): keep[i] = f"{k}={wsl_path(v)}"
+        return run(["wsl.exe", "-e", "env", f"ATIV_DUMP={wdump}", "PYTHONUTF8=1"] + keep +
+                   ["python3", wroot + "/pipeline/vitarecomp.py", "export-apk", T, wout] + rest, check=False).returncode
+    g = Game(T, "export-apk")
+    if not os.path.isfile(os.path.join(g.W, "elf", g.ELF)): die(f"{T}: not added yet (vitarecomp add, or + Add game in the launcher)")
+    stamp = os.path.join(g.OUT, ".recompile_inputs")
+    if not os.path.isfile(stamp) or open(stamp, encoding="utf-8").read().strip() != recompile_inputs(g):
+        die(f"{T}: its code isn't made for these tools yet: build it (vitarecomp ready {T}, or Build in the launcher), then export")
+    try: t = apk.toolchain()
+    except RuntimeError as e: die(f"export-apk: {e}")
+    pkg = apk.package_id(g.TITLE_ID)
+    libs = {}
+    for i, a in enumerate(abis):
+        say(f"export {i + 1}/{len(abis) + 1}: compiling {g.NAME} for Android ({apk.ABIS[a]}); the first time takes as long as a build")
+        run(SELF + ["build", T], env=env_with({"TARGET": "android-" + a}))
+        d = os.path.join(g.OUT, "android-" + apk.ABIS[a])
+        libs[apk.ABIS[a]] = [os.path.join(d, "libSDL3.so"), os.path.join(d, "libmain.so")]
+        for f in libs[apk.ABIS[a]]:
+            if not os.path.isfile(f): die(f"export-apk: {f} wasn't made")
+    say(f"export {len(abis) + 1}/{len(abis) + 1}: packing and signing the APK ({pkg})")
+    imgs = [g.BASE + ".img"] + [m + ".img" for m in g.MODS] + [m + ".img" for m in g.LMODS]
+    assets = [(os.path.join(g.OUT, n), n) for n in imgs]
+    for src, n in assets:
+        if not os.path.isfile(src): die(f"export-apk: {n} wasn't made in {g.OUT}")
+    shipped = os.path.join(PACKS, g.PACK, "shaders.txt")
+    if os.path.isfile(shipped): assets.append((shipped, "shaders.txt"))
+    env = [tuple(w.partition("=")[::2]) for w in g.RUN_ENV.split() if "=" in w]
+    env += [(k, v) for k, v in play_fixed_env(g, "$FILES/shaders.txt") if k != "RECOMP_ICON"]
+    if g.MODS: env.append(("RECOMP_MODULES", ",".join(f"$FILES/{m}.img" for m in g.MODS)))
+    if g.LMODS: env.append(("RECOMP_LOAD_MODULES", ";".join(f"{g.LPATH[m]}=$FILES/{m}.img" for m in g.LMODS)))
+    work = tempfile.mkdtemp(prefix="nativ-apk-")
+    try:
+        launch = os.path.join(work, "launch.txt")
+        with open(launch, "w", encoding="utf-8", newline="\n") as f:
+            f.write(apk.launch_text([f"$FILES/{g.BASE}.img", g.entry(), "100000000000"], env))
+        h = hashlib.sha256()
+        for src, _n in assets + [(launch, "")]:
+            with open(src, "rb") as f: h.update(f.read())
+        with open(os.path.join(work, "stamp.txt"), "w", newline="\n") as f: f.write(h.hexdigest() + "\n")
+        assets += [(launch, "launch.txt"), (os.path.join(work, "stamp.txt"), "stamp.txt")]
+        icon = os.path.join(g.W, "app0", "sce_sys", "icon0.png")
+        if not os.path.isfile(icon): icon = os.path.join(ROOT, "assets", "brand", "png", "icon-256.png")
+        apk.build_apk(out, package=pkg, label=g.NAME, libs=libs, assets=assets, icon=icon,
+                      keystore=os.path.join(DUMP, "android", "export.keystore"), t=t,
+                      java_src=os.path.join(RUNTIME, "platform", "android", "NativActivity.java"),
+                      version_name=g.VERSION or "1.0", work=os.path.join(work, "apk"))
+    finally: shutil.rmtree(work, ignore_errors=True)
+    say(f"exported {g.NAME} -> {out} ({os.path.getsize(out) / 1e6:.0f} MB, {pkg}); on the device: adb install {os.path.basename(out)}, "
+        f"then its files: adb push <app0> /sdcard/Android/data/{pkg}/files/fs/app0")
+    say("export: " + apk.NOTICE)
+    return 0
+
+
 def cmd_export_win(T, out, rest):
     """the game as a folder for the player's own other Windows PCs (pipeline/portable.py): its code as it is (made by the
     launcher's Build: nothing is recompiled) compiled once more for a CPU level other PCs have -- --cpu, default x86-64-v3
@@ -1430,6 +1514,9 @@ def main(argv):
     if cmd == "export-appimage":
         if len(argv) < 3: usage(); return 1
         return cmd_export_appimage(T, argv[2], argv[3:])
+    if cmd == "export-apk":
+        if len(argv) < 3: usage(); return 1
+        return cmd_export_apk(T, argv[2], argv[3:])
     if cmd == "export-win":
         if len(argv) < 3: usage(); return 1
         return cmd_export_win(T, argv[2], argv[3:])
