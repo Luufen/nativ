@@ -50,3 +50,18 @@ player's machine needs nothing else. Each sits in the install with its licence (
 
 Nativ links FFmpeg's libraries into each game on the player's own machine, from these unmodified builds. On macOS,
 Apple's Command Line Tools (the compiler and SDK) come from Apple and are not part of Nativ.
+
+## For the Android export, fetched on the player's machine
+
+`runtime/platform/android/setup-toolchain.sh` downloads and builds these into `~/toolchains/ativ-android` (Linux or WSL)
+when the player sets up the Android export; none of them is part of a Nativ release. An exported `.apk` holds the
+compiled game with SDL3, zlib and FFmpeg's decoders built in (and SDL's Java side), for the player's own device only.
+
+| Software | Version | Licence |
+|---|---|---|
+| [Android NDK](https://developer.android.com/ndk) | r30 | Android Software Development Kit License Agreement; its parts' own (LLVM: Apache 2.0 with LLVM exceptions) |
+| Android SDK build-tools and platform | 36.0.0 / android-36 | Android Software Development Kit License Agreement |
+| [Eclipse Temurin](https://adoptium.net) JDK | 21.0.13+9 | GPL 2.0 with the Classpath Exception (the build's tools only, nothing of it is in an APK) |
+| [SDL](https://libsdl.org), libSDL3.so and its Java side | 3.4.16 | zlib |
+| [zlib](https://zlib.net) | 1.3.1 | zlib |
+| [FFmpeg](https://ffmpeg.org): libavcodec and libavutil, the H.264 and AAC decoders only | 7.1.1 | LGPL 2.1 or later |

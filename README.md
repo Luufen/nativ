@@ -63,7 +63,13 @@ game from your copy, plus frame-rate and widescreen settings found automatically
 - A library page (sorted by state, play time and size, with real game names) and a page for each game.
 - Finds games in other folders and drives (including a Vita3K installation) and can play them where they are.
 - Add or remove a game in Steam, also from the Steam Deck's Game Mode.
-- Export a built game for your own use: a folder for another Windows PC, or an AppImage for your Steam Deck.
+- Export a built game for your own use: a folder for another Windows PC, an AppImage for your Steam Deck, or an app
+  (`.apk`) for your own Android phone or tablet (64-bit, Android 10 or newer; touch with on-screen buttons, or a
+  controller; Back opens the in-game menu). A game over 1.5 GB gets a second file, `<name>-data.zip`, to copy along and
+  choose at its first start. The Steam Deck and Android exports are built in WSL on Windows and need their toolchain
+  once: `bash runtime/platform/linux/setup-toolchain.sh` or `bash runtime/platform/android/setup-toolchain.sh` there.
+- A licence can also be a zRIF line: pick a `.txt` file holding it where the launcher asks for a `.rif` / `work.bin`
+  (or give that file to `--license`); importing licences and decrypting PKGs read it too.
 - **Updates & add-ons** on each game's page: which version you play and which update is recommended; add, replace or
   remove an update (the game is built again), and add or remove add-ons (DLC) from their PKG or folder and licence
   (nothing is built). A game sees only the add-ons you added as installed; before, it was told every add-on it asked
