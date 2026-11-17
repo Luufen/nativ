@@ -65,6 +65,16 @@ int main(void) {
 	CHECK(export_shown_folder("D:/out/Soul-Windows") == "D:/out/Soul-Windows");
 	CHECK(export_shown_folder("D:/out/Soul-Windows.zip") == "D:/out");
 	CHECK(export_shown_folder("D:/out/S.AppImage") == "D:/out");
+	/* (EXPORT-APK A8) Android: an .apk for the device's arm64, optionally installed on the USB device too */
+	CHECK(export_out_name("Soul Sacrifice Delta", EXPORT_ANDROID) == "Soul-Sacrifice-Delta.apk");
+	CHECK(export_out_name("???", EXPORT_ANDROID) == "game.apk");
+	{	const std::vector<std::string> a = export_command(EXPORT_ANDROID, "PCSE00540", "D:/o/K.apk", "x86-64-v3", true, "webcam");
+		CHECK(a.size() == 5 && a[0] == "export-apk" && a[1] == "PCSE00540" && a[2] == "D:/o/K.apk" && a[3] == "--abi" && a[4] == "arm64"); }   /* (no CPU, zip or camera) */
+	{	const std::vector<std::string> a = export_command(EXPORT_ANDROID, "PCSE00540", "D:/o/K.apk", "", false, "", true);
+		CHECK(a.size() == 6 && a[5] == "--install"); }
+	CHECK(export_shown_folder("D:/out/K.apk") == "D:/out");
+	{	ExportView v = export_parse("export 3/3: packing and signing the APK (local.nativ.pcse00540)\nexported K -> D:/o/K.apk (162 MB, local.nativ.pcse00540, the game's files inside). On the device: copy\n", false);
+		CHECK(v.step == 3 && v.steps == 3 && v.out == "D:/o/K.apk" && v.result.find("On the device") != std::string::npos); }
 	printf("export_progress: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 }

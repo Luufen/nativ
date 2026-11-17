@@ -1426,6 +1426,7 @@ def cmd_export_apk(T, out, rest):
         for i, kv in enumerate(keep):   # (paths as WSL sees them)
             k, _, v = kv.partition("=")
             if k == "ATIV_PACKS" and re.match(r"[A-Za-z]:[\\/]", v): keep[i] = f"{k}={wsl_path(v)}"
+        keep.append(f"NATIV_OUT_SHOWN={os.path.abspath(out)}")   # (the result line names the path as given: the launcher's "Show in folder")
         rc = run(["wsl.exe", "-e", "env", f"ATIV_DUMP={wdump}", "PYTHONUTF8=1"] + keep +
                  ["python3", wroot + "/pipeline/vitarecomp.py", "export-apk", T, wout] + [a for a in rest if a != "--install"], check=False).returncode
         if rc == 0 and install: apk_install(Game(T, "export-apk"), os.path.abspath(out), adb)
@@ -1488,11 +1489,12 @@ def cmd_export_apk(T, out, rest):
                       version_name=g.VERSION or "1.0", work=os.path.join(work, "apk"),
                       extra_assets=[(zpath, "nativ-data/app0.zip")] if mode == "inside" else [])
     finally: shutil.rmtree(work, ignore_errors=True)
+    shown = ENV.get("NATIV_OUT_SHOWN") or out; data_shown = shown[:-4] + "-data.zip"
     if mode == "inside":
-        say(f"exported {g.NAME} -> {out} ({os.path.getsize(out) / 1e6:.0f} MB, {pkg}, the game's files inside). On the device: "
+        say(f"exported {g.NAME} -> {shown} ({os.path.getsize(out) / 1e6:.0f} MB, {pkg}, the game's files inside). On the device: "
             "copy the APK there, open it to install (allow installing from that app once), start the game")
     else:
-        say(f"exported {g.NAME} -> {out} ({os.path.getsize(out) / 1e6:.0f} MB, {pkg}) and its files {data_out} "
+        say(f"exported {g.NAME} -> {shown} ({os.path.getsize(out) / 1e6:.0f} MB, {pkg}) and its files {data_shown} "
             f"({os.path.getsize(data_out) / 1e6:.0f} MB). On the device: copy both there, install the APK, start the game "
             f"and choose {data_name} when it asks")
     if install: apk_install(g, out, adb)

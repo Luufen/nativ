@@ -3047,12 +3047,13 @@ static void game_card(const Game &g, float w, float name_h, float id_h) {
  * (no hover needed: the explanations were tooltips). B or Back closes it */
 /* ---- Export (EXPORT-01a, EXPORT-02): the game for the player's other devices -- Windows: a folder (`vitarecomp export-win
  * <title> <folder> --cpu <level> [--zip]`: start.cmd + the game, for other PCs), Linux / Steam Deck: one AppImage file
- * (`vitarecomp export-appimage <title> <out>`), Android: shown, not offered yet. Both commands keep the n04 contract (the
+ * (`vitarecomp export-appimage <title> <out>`), Android: an APK (`vitarecomp export-apk <title> <out.apk> --abi arm64
+ * [--install]`, EXPORT-APK A8). Both commands keep the n04 contract (the
  * notice line, the steps, the result line, or one plain line why it failed -- export_progress.h). Only for a game that is
  * Ready to play, like Add to Steam. What it makes is the player's own: the dialog says so first. The owner, 2026-11-10:
  * "am besten gleich ein Menü mit Export und dann den optionen für Linux, android oder windows". */
 static bool g_export_open;
-static int g_export_target = EXPORT_WIN, g_export_cpu = 0, g_export_cam = 0; static bool g_export_zip = false;   /* (the cpu: 0 x86-64-v3, 1 x86-64-v2; the camera: export_cameras) */
+static int g_export_target = EXPORT_WIN, g_export_cpu = 0, g_export_cam = 0; static bool g_export_zip = false, g_export_install = false;   /* (install: Android, onto the USB device too) */   /* (the cpu: 0 x86-64-v3, 1 x86-64-v2; the camera: export_cameras) */
 static int g_export_target_seen = -1;
 static std::string g_export_game, g_export_name, g_export_out, g_export_dir, g_export_dir_seen;
 static std::string g_export_shot_log; static int g_export_shot_state = -1;   /* (ATIV_SHOT_UI=export:<id>:<log>:<run|ok|fail>) */
@@ -3070,7 +3071,7 @@ static void export_open(const Game &g) {
 #else
 	g_export_target = EXPORT_LINUX;
 #endif
-	if (const char *e = getenv("ATIV_SHOT_EXPORT")) g_export_target = !strcmp(e, "linux") ? EXPORT_LINUX : EXPORT_WIN;   /* (a screenshot run's choice) */
+	if (const char *e = getenv("ATIV_SHOT_EXPORT")) g_export_target = !strcmp(e, "linux") ? EXPORT_LINUX : !strcmp(e, "android") ? EXPORT_ANDROID : EXPORT_WIN;   /* (a screenshot run's choice) */
 	{	const Ini sh = ini_load(shared_path()); const std::string *cv = ini_find(sh, "camera"); const std::string cam = cv ? *cv : "light";   /* (the other PC's camera: as this one's Settings say, to start with) */
 		g_export_cam = 0; for (int i = 0; i < 3; i++) if (cam == export_cameras[i]) g_export_cam = i; }
 	const char *docs = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
@@ -3078,11 +3079,11 @@ static void export_open(const Game &g) {
 	g_export_dir.clear(); g_export_dir_seen.clear(); g_export_target_seen = g_export_target;
 }
 static void export_choose(void) {
-	static const SDL_DialogFileFilter f[] = {{"AppImage (*.AppImage)", "AppImage"}};
+	static const SDL_DialogFileFilter f[] = {{"AppImage (*.AppImage)", "AppImage"}}, fa[] = {{"Android app (*.apk)", "apk"}};
 	if (use_in_app_browser()) { browse_open(&g_export_dir, BROWSE_FOLDER); return; }   /* (a controller or a finger: the folder; the name is the game's) */
 	if (g_shot_mode) { g_shot_done.push_back("choose where to save " + export_out_name(g_export_name, g_export_target)); return; }
 	if (g_export_target == EXPORT_WIN) { g_pick_target = &g_export_dir; SDL_ShowOpenFolderDialog(picked, nullptr, g_win, nullptr, false); return; }   /* (Windows: a folder is made in the one chosen) */
-	g_pick_target = &g_export_out; SDL_ShowSaveFileDialog(picked, nullptr, g_win, f, 1, g_export_out.c_str());
+	g_pick_target = &g_export_out; SDL_ShowSaveFileDialog(picked, nullptr, g_win, g_export_target == EXPORT_ANDROID ? fa : f, 1, g_export_out.c_str());
 }
 /* (EXPORT-02) a dialog's foot for the pad: the page's first button (its primary one) is where the focus goes -- when the page
  * changes (it started, it finished: the button that had the focus is gone), and when D-pad down leaves the body, whatever
@@ -3123,9 +3124,9 @@ static void export_modal(void) {
 		if (g_task.log_from < g_log.size()) part = g_log.substr(g_task.log_from);
 	}
 	const ExportView v = export_parse(part, state == 3);
-	const bool win = g_export_target == EXPORT_WIN;
+	const bool win = g_export_target == EXPORT_WIN, android = g_export_target == EXPORT_ANDROID;
 	g_export_report = std::string("export ") + (state == 0 ? "ask" : state == 1 ? "run" : state == 2 ? "ok" : "fail") + " step " + std::to_string(v.step) + "/" + std::to_string(v.steps) + " | " + (v.out.empty() ? g_export_out : v.out) + " | " + v.error + (v.notice.empty() ? "" : " | notice: " + v.notice)
-	                  + " | target " + (win ? "win" : "linux") + (win ? std::string(" cpu ") + (g_export_cpu ? "x86-64-v2" : "x86-64-v3") + " camera " + export_cameras[g_export_cam] + (g_export_zip ? " zip" : "") : std::string());
+	                  + " | target " + (win ? "win" : android ? "android" : "linux") + (android && g_export_install ? " install" : "") + (win ? std::string(" cpu ") + (g_export_cpu ? "x86-64-v2" : "x86-64-v3") + " camera " + export_cameras[g_export_cam] + (g_export_zip ? " zip" : "") : std::string());
 	ui::heading("Export", em * 1.4f);
 	ImGui::TextDisabled("%s", g_export_name.c_str());
 	dialog_body_begin();
@@ -3145,11 +3146,9 @@ static void export_modal(void) {
 	}
 	if (state == 0) {
 		ImGui::TextDisabled("Export for");
-		{	static const char *const t[] = {"Windows##xt", "Linux / Steam Deck##xt"};
-			ui::segmented(t, 2, &g_export_target);
-			ImGui::SameLine(); ImGui::BeginDisabled(); ImGui::Button("Android##xt"); ImGui::EndDisabled();   /* (shown, not offered: below why) */
+		{	static const char *const t[] = {"Windows##xt", "Linux / Steam Deck##xt", "Android##xt"};
+			ui::segmented(t, 3, &g_export_target);
 		}
-		ui::muted_wrapped("Android: not available yet. Nativ has no Android build of its runtime so far (no Android toolchain, app package or movie decoder for phones).");
 		ImGui::Dummy(ImVec2(0, em * 0.3f));
 		if (win) {
 			ImGui::TextUnformatted("A folder that runs this game on another Windows PC, with what it needs inside. Copy it there and double-click start.cmd; its saves stay in the folder.");
@@ -3160,6 +3159,11 @@ static void export_modal(void) {
 			ImGui::TextDisabled("Rear camera on that PC");
 			{ static const char *const c[] = {"A lamp (made up)##xm", "Its camera##xm", "A dark room##xm"}; ui::segmented(c, 3, &g_export_cam); }
 			ImGui::TextDisabled("Also as one .zip"); ImGui::SameLine(); ui::toggle("xzip", &g_export_zip);
+		} else if (android) {
+			ImGui::TextUnformatted("An app for your Android phone or tablet (64-bit, Android 10 or newer). Copy the .apk to the device and open it there to install it (Android asks once to allow installing from that app). The game's files are inside it; for a big game (over 1.5 GB) a second file, <name>-data.zip, is made beside it: copy it too, and choose it when the game asks at its first start.");
+			ImGui::Dummy(ImVec2(0, em * 0.2f));
+			ImGui::TextDisabled("Also install it on the device connected by USB"); ImGui::SameLine(); ui::toggle("xinst", &g_export_install);
+			ui::muted_wrapped("Needs USB debugging on the device (in its Developer options) and Android's adb on this computer.");
 		} else {
 			ImGui::TextUnformatted("One file that runs this game on a Steam Deck or another Linux PC, with what it needs inside. Copy it to the Deck and start it there (in Game Mode: add it to Steam on the Deck).");
 		}
@@ -3169,11 +3173,13 @@ static void export_modal(void) {
 		if (ImGui::Button(use_in_app_browser() || win ? "Choose a folder…###choose" : "Choose…###choose")) export_choose();   /* (one id for both labels: the label follows the input in use, and a changing id lost the focus) */
 		ImGui::Dummy(ImVec2(0, em * 0.2f));
 		ui::muted_wrapped(win ? "It takes a while: the game is compiled for other PCs' processors, then copied with its files (a few GB)."
+		                  : android ? "It takes a while: the game is compiled for Android, then packed and signed with your own key (made once on this computer)."
 		                      : "It takes a while: the game is compiled for the Deck's processor, then packed with its files (a few GB).");
 	} else {
 		static const char *const def_lin[] = {"", "Compiling for the Deck", "Collecting the game's files", "Packing the AppImage", ""};
 		static const char *const def_win[] = {"", "Compiling for other PCs", "Collecting the game's files", "Writing the folder and start.cmd", "Packing it as one .zip"};
-		const char *const *def = win ? def_win : def_lin;
+		static const char *const def_and[] = {"", "Compiling for Android", "The game's files", "Packing and signing the APK", ""};
+		const char *const *def = win ? def_win : android ? def_and : def_lin;
 		/* now, on the launcher's clock (a screenshot run's sample: its own latest stamp, so the shot is the same each time) */
 		int now_s = v.last_at;
 		if (g_export_shot_state < 0) { time_t tt = time(nullptr); struct tm tm;
@@ -3217,10 +3223,11 @@ static void export_modal(void) {
 		ImGui::BeginDisabled(g_task.running);
 		if (ui::primary_button("Export")) {
 			std::string out = g_export_out;
-			if (!win && (out.size() < 9 || out.compare(out.size() - 9, 9, ".AppImage") != 0)) out += ".AppImage";   /* (the command takes only *.AppImage) */
+			if (!win && !android && (out.size() < 9 || out.compare(out.size() - 9, 9, ".AppImage") != 0)) out += ".AppImage";   /* (the command takes only *.AppImage) */
+			if (android && (out.size() < 4 || out.compare(out.size() - 4, 4, ".apk") != 0)) out += ".apk";   /* (and export-apk only *.apk) */
 			g_export_out = out;
-			task_start("Exporting " + g_export_name + (win ? " for Windows" : " for Steam Deck"), "export", g_export_game,
-			           {step("", vitarecomp(export_command(g_export_target, g_export_game, out, g_export_cpu ? "x86-64-v2" : "x86-64-v3", g_export_zip, export_cameras[g_export_cam])))});
+			task_start("Exporting " + g_export_name + (win ? " for Windows" : android ? " for Android" : " for Steam Deck"), "export", g_export_game,
+			           {step("", vitarecomp(export_command(g_export_target, g_export_game, out, g_export_cpu ? "x86-64-v2" : "x86-64-v3", g_export_zip, export_cameras[g_export_cam], g_export_install)))});
 		}
 		const ImGuiID first = ImGui::GetItemID();
 		ImGui::EndDisabled();

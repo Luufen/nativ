@@ -1,6 +1,6 @@
 /*
- * export_progress.h - what "Export..." shows while `vitarecomp export-appimage <title> <out>` or `vitarecomp export-win <title>
- * <folder> --cpu <level> [--zip]` (EXPORT-02) runs, read from its output in the launcher's log (EXPORT-01a's contract, in order):
+ * export_progress.h - what "Export..." shows while `vitarecomp export-appimage <title> <out>`, `vitarecomp export-win <title>
+ * <folder> --cpu <level> [--zip]` (EXPORT-02) or `vitarecomp export-apk <title> <out.apk> --abi arm64 [--install]` runs, read from its output in the launcher's log (EXPORT-01a's contract, in order):
  *   export: <the private-use notice>
  *   export 1/3: compiling ...   export 2/3: collecting ...   export 3/3: packing ...   (export-win --zip: four steps)
  *   exported <name> -> <out> (<n> GB) ...
@@ -98,18 +98,23 @@ static inline std::string export_file_name(const std::string &game) {
 }
 /* (EXPORT-02) where an export goes: a Windows folder (export-win), an AppImage for Linux / a Steam Deck (export-appimage) */
 #include <vector>
-enum { EXPORT_WIN = 0, EXPORT_LINUX = 1 };
-/* the name it gets: "Soul-Sacrifice-Delta-Windows" (a folder), "Soul-Sacrifice-Delta.AppImage" */
+enum { EXPORT_WIN = 0, EXPORT_LINUX = 1, EXPORT_ANDROID = 2 };   /* (EXPORT-APK A8: an APK for the player's Android device) */
+/* the name it gets: "Soul-Sacrifice-Delta-Windows" (a folder), "Soul-Sacrifice-Delta.AppImage", "Soul-Sacrifice-Delta.apk" */
 static inline std::string export_out_name(const std::string &game, int target) {
 	std::string f = export_file_name(game);
-	return target == EXPORT_WIN ? f.substr(0, f.size() - 9) + "-Windows" : f;
+	return target == EXPORT_WIN ? f.substr(0, f.size() - 9) + "-Windows" : target == EXPORT_ANDROID ? f.substr(0, f.size() - 9) + ".apk" : f;
 }
 /* the rear camera an exported Windows folder starts with (settings "camera"): a made-up lamp, the PC's camera, a dark room */
 static const char *const export_cameras[3] = {"light", "webcam", "dark"};
 /* the command's arguments (after vitarecomp): cpu a level export-win accepts ("x86-64-v3", "x86-64-v2"); camera one of
- * export_cameras ("": none given) */
+ * export_cameras ("": none given); install: Android, also onto the device connected by USB (export-apk --install) */
 static inline std::vector<std::string> export_command(int target, const std::string &title, const std::string &out, const std::string &cpu, bool zip,
-                                                      const std::string &camera = "") {
+                                                      const std::string &camera = "", bool install = false) {
+	if (target == EXPORT_ANDROID) {
+		std::vector<std::string> a{"export-apk", title, out, "--abi", "arm64"};
+		if (install) a.push_back("--install");
+		return a;
+	}
 	if (target == EXPORT_WIN) {
 		std::vector<std::string> a{"export-win", title, out, "--cpu", cpu};
 		if (!camera.empty()) { a.push_back("--camera"); a.push_back(camera); }
@@ -118,9 +123,9 @@ static inline std::vector<std::string> export_command(int target, const std::str
 	}
 	return {"export-appimage", title, out};
 }
-/* "Show in folder": a file (.AppImage, .zip) -- its folder; a folder (Windows' export) -- itself */
+/* "Show in folder": a file (.AppImage, .zip, .apk) -- its folder; a folder (Windows' export) -- itself */
 static inline std::string export_shown_folder(const std::string &out) {
 	auto ends = [&](const char *x) { const size_t n = strlen(x); return out.size() >= n && out.compare(out.size() - n, n, x) == 0; };
-	return ends(".AppImage") || ends(".zip") ? export_folder(out) : out;
+	return ends(".AppImage") || ends(".zip") || ends(".apk") ? export_folder(out) : out;
 }
 #endif
