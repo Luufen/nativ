@@ -11,14 +11,71 @@ license.cpp's SceNpDrmLicense field layout (sce_types.h) is the schema for
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import dataclasses
 import struct
+import zlib
 
 RIF_SIZE = 512          # sizeof(SceNpDrmLicense)
 
 
 class RifError(ValueError):
     """A RIF that is the wrong size or otherwise malformed."""
+
+
+# ---------------------------------------------------------------------------
+# zRIF: a licence written as one text line -- base64 of the 512-byte RIF, zlib-compressed (1 KB window) with a preset
+# dictionary of the bytes licences share. The dictionary and its id are pkg2zip's (mmozeiko/pkg2zip
+# 9222c4e00235dfe7914e9db0cc352da07e63d9f9, pkg2zip_zrif.c, released into the public domain by its author).
+# ---------------------------------------------------------------------------
+ZRIF_DICT = (bytes(880) + b"00009" + bytes(11) + b"000060000700008\x00000030000400005"
+             b"0_00-ADDCONT00002-PCSG00000000001-PCSE000-PCSF000-PCSC000-PCSD000-PCSA000-PCSB000"
+             b"\x00\x01\x00\x01\x00\x01\x00\x02\xef\xcd\xab\x89\x67\x45\x23\x01")
+ZRIF_DICT_ID = 0x627D1D5D
+assert len(ZRIF_DICT) == 1024 and zlib.adler32(ZRIF_DICT) == ZRIF_DICT_ID
+
+
+def decode_zrif(text: str | bytes) -> bytes:
+    """The 512-byte RIF a zRIF line holds; RifError when it isn't one."""
+    s = text.decode("ascii", "replace") if isinstance(text, bytes) else text
+    s = "".join(s.split())
+    try:
+        raw = base64.b64decode(s + "=" * (-len(s) % 4), validate=True)
+    except (binascii.Error, ValueError):
+        raise RifError("not a zRIF: not base64") from None
+    if len(raw) < 6 or (raw[0] << 8 | raw[1]) % 31 or raw[0] & 0x0F != 8:
+        raise RifError("not a zRIF: no zlib header")
+    if raw[1] & 0x20 and struct.unpack(">I", raw[2:6])[0] != ZRIF_DICT_ID:
+        raise RifError("not a zRIF: an unknown dictionary")
+    try:
+        d = zlib.decompressobj(15, zdict=ZRIF_DICT)
+        rif = d.decompress(raw) + d.flush()
+    except zlib.error as exc:
+        raise RifError(f"zRIF does not decompress ({exc})") from None
+    if not d.eof:
+        raise RifError("zRIF is cut short")
+    if len(rif) != RIF_SIZE:
+        raise RifError(f"zRIF holds {len(rif)} bytes, expected {RIF_SIZE}")
+    return rif
+
+
+def encode_zrif(rif: bytes) -> str:
+    """A RIF as a zRIF line (the tests' way to make one)."""
+    c = zlib.compressobj(9, zlib.DEFLATED, 10, zdict=ZRIF_DICT)
+    return base64.b64encode(c.compress(rif) + c.flush()).decode("ascii")
+
+
+def licence_bytes(data: bytes) -> bytes:
+    """A licence file's 512-byte RIF: a .rif / work.bin, NoNpDrm's 1024-byte work.bin (the licence first), or a zRIF
+    line (a text file); RifError otherwise."""
+    if len(data) == RIF_SIZE:
+        return data
+    if len(data) == 2 * RIF_SIZE:
+        return data[:RIF_SIZE]
+    if len(data) < RIF_SIZE:
+        return decode_zrif(data)
+    raise RifError(f"a licence is a {RIF_SIZE}-byte .rif/work.bin or a zRIF line, not {len(data)} bytes")
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +176,28 @@ def _selftest() -> None:
     try:
         parse_rif(rif[:-4])
         raise AssertionError("expected a RifError for a short RIF")
+    except RifError:
+        pass
+
+    # zRIF: the same licence as a text line, with and without padding, around spaces and a line end
+    z = encode_zrif(rif)
+    assert z.startswith("KO5i"), z[:8]   # (0x28 0xEE 0x62 0x7D: a 1 KB window, the dictionary's id)
+    assert decode_zrif(z) == rif
+    assert decode_zrif((" " + z.rstrip("=") + "\r\n").encode()) == rif
+    assert licence_bytes(z.encode() + b"\n") == rif
+    assert licence_bytes(rif + bytes(RIF_SIZE)) == rif and licence_bytes(rif) == rif
+    plain = base64.b64encode(zlib.compress(rif)).decode()   # (zlib without the dictionary still decodes)
+    assert decode_zrif(plain) == rif
+    for bad in ("not a licence", base64.b64encode(b"hello world").decode(), z[:40],
+                encode_zrif(rif[:100]), base64.b64encode(zlib.compress(rif, 9)[:2] + b"\x01\x02\x03\x04").decode()):
+        try:
+            decode_zrif(bad)
+            raise AssertionError(f"expected a RifError for {bad[:20]!r}")
+        except RifError:
+            pass
+    try:
+        licence_bytes(bytes(700))
+        raise AssertionError("expected a RifError for a 700-byte file")
     except RifError:
         pass
 

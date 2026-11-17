@@ -189,6 +189,8 @@ def extract_pkg(pkg_path: str, out_dir: str, *, rif_path: str | None = None) -> 
     if rif_path:
         with open(rif_path, "rb") as f:
             rif = f.read()
+        if len(rif) < RIF.RIF_SIZE:   # (a zRIF line: the licence it holds)
+            rif = RIF.decode_zrif(rif)
     if rif is not None:
         work_dir = os.path.join(out_dir, "sce_sys", "package")
         os.makedirs(work_dir, exist_ok=True)

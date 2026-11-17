@@ -67,13 +67,12 @@ def _detect_kind(path: str) -> str:
 
 def _read_rif_file(path: str) -> bytes:
     with open(path, "rb") as f:
-        data = f.read()
-    if len(data) == RIF.RIF_SIZE:
-        return data
-    # NoNpDrm's 1024-byte work.bin (our test copy of Killzone): the 512-byte licence first, then a trailer
-    if len(data) == 2 * RIF.RIF_SIZE:
-        return data[:RIF.RIF_SIZE]
-    raise GameError(f"{path} is not a {RIF.RIF_SIZE}-byte .rif/work.bin")
+        data = f.read(2 * RIF.RIF_SIZE + 1)
+    # a .rif / work.bin, NoNpDrm's 1024-byte work.bin (our test copy of Killzone: the licence first), or a zRIF line
+    try:
+        return RIF.licence_bytes(data)
+    except RIF.RifError as exc:
+        raise GameError(f"{path} is not a licence: {exc}") from None
 
 
 def _find_work_bin(root: str) -> str | None:
@@ -368,6 +367,23 @@ def _selftest() -> None:
         assert open(os.path.join(out_a, "eboot.bin.elf"), "rb").read() == expected_elf
         assert open(os.path.join(out_a, "sce_sys", "param.sfo"), "rb").read() == sfo_bytes
         assert json.load(open(os.path.join(out_a, "game.json")))["content_id"] == content_id
+
+        # --- (a2) the same PKG with its licence as a zRIF line (a text file); the licence kept is the 512-byte RIF ---
+        zrif_path, kept_a2 = os.path.join(tmp, "licence.txt"), os.path.join(tmp, "out_a2.rif")
+        with open(zrif_path, "w") as f:
+            f.write(RIF.encode_zrif(license_rif) + "\n")
+        out_a2 = os.path.join(tmp, "out_a2")
+        game_a2 = convert_game(pkg_path, out_a2, license_path=zrif_path, license_out=kept_a2)
+        assert game_a2.klicensee_source == "license" and game_a2.selfs_decrypted == 1, game_a2
+        assert open(os.path.join(out_a2, "eboot.bin.elf"), "rb").read() == expected_elf
+        assert open(kept_a2, "rb").read() == license_rif
+        with open(zrif_path, "w") as f:
+            f.write("KO5ifR1dQ+broken\n")
+        try:
+            convert_game(pkg_path, os.path.join(tmp, "out_a3"), license_path=zrif_path)
+            raise AssertionError("expected GameError for a broken zRIF")
+        except GameError:
+            pass
 
         # --- (b) a NoNpDrm-style folder, with klicensee auto-discovered from
         # its own sce_sys/package/work.bin (no --license passed) ---

@@ -4,7 +4,8 @@ ATIV_DUMP). Adding a game, its update or a PKG looks here by the copy's content 
 looks in its ux0/license; every licence that decrypts a copy, and every one a folder search finds, comes here.
 
   licenses.py                              the kept licences: content id, title id
-  licenses.py import <file|folder>...      .rif and work.bin files (a folder: at any depth -- a copied ux0:nonpdrm, ux0:app)
+  licenses.py import <file|folder>...      .rif and work.bin files (a folder: at any depth -- a copied ux0:nonpdrm, ux0:app);
+                                           a file named here may also be a text file with a zRIF line
   licenses.py vita <address>[:port]        from the Vita itself over VitaShell's FTP (VitaShell, SELECT; port 1337):
                                            NoNpDrm's ux0:nonpdrm/license, and each ux0:app/<title> and
                                            ux0:addcont/<title>/<add-on> folder's sce_sys/package/work.bin
@@ -41,10 +42,8 @@ def _title_like(s: str) -> bool:
 
 def add_bytes(data: bytes) -> tuple[str, str]:
     """One licence into the store: ("added" | "known" | "console" | "bad", content id)."""
-    if len(data) not in (RIF.RIF_SIZE, 2 * RIF.RIF_SIZE):   # (NoNpDrm's newer work.bin is 1024 bytes: the licence first)
-        return "bad", ""
-    rif = data[:RIF.RIF_SIZE]
-    try:
+    try:   # (NoNpDrm's newer work.bin is 1024 bytes: the licence first; a zRIF line: the licence it holds)
+        rif = RIF.licence_bytes(data)
         info = RIF.parse_rif(rif)
     except ValueError:
         return "bad", ""
@@ -223,6 +222,16 @@ def selftest() -> None:
             f.write(fake)
         assert [s for s, _c, _f in import_paths([dupe_path])] == ["known"]
         assert kept() == ["UP9000-PCSA00107_00-KZV0000000000000"]
+        # a zRIF line in a text file, named on the command line: the licence it holds is kept
+        zfake = RIF.build_rif("UP4501-PCSA00999_00-ZRIFTEST00000000", bytes(range(16, 32)))
+        ztxt = os.path.join(tmp, "licence.txt")
+        with open(ztxt, "w") as f:
+            f.write(RIF.encode_zrif(zfake) + "\n")
+        assert [(s, c) for s, c, _f in import_paths([ztxt])] == [("added", "UP4501-PCSA00999_00-ZRIFTEST00000000")]
+        assert open(find("UP4501-PCSA00999_00-ZRIFTEST00000000"), "rb").read() == zfake
+        with open(ztxt, "w") as f:
+            f.write("KO5ifR1dQ+not-a-licence\n")
+        assert [s for s, _c, _f in import_paths([ztxt])] == ["bad"]
     print("licenses.py self-test: OK")
 
 

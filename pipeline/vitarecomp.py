@@ -36,7 +36,8 @@
                                             app0, started by start.cmd; --zip: also <out-folder>.zip -- private
   vitarecomp add       <copy> [--license work.bin] [--no-build] [--in-place]   a game or its update (ux0:app/<title>
                                             or ux0:patch/<title> copied off the Vita, or a PKG with its licence file
-                                            (.rif or work.bin); an already-decrypted folder works too), decrypted here
+                                            (.rif, work.bin, or a text file with its zRIF line); an already-decrypted
+                                            folder works too), decrypted here
                                             (decrypt/vitadecrypt) and kept by kind -- dump/decrypted/<title>/app0 (the
                                             game, with license.rif: its update decrypts with the game's licence),
                                             patch0 (the update) -- then import, analyze, recompile and build when a
@@ -356,7 +357,7 @@ def cmd_add_addon(T, args, tid, cid):
     if "--license" not in args and not os.path.isfile(os.path.join(T, "sce_sys", "package", "work.bin")):
         k = subprocess.run([PY, os.path.join(R, "licenses.py"), "find", cid], env=env_with({"ATIV_DUMP": DUMP}), capture_output=True, text=True)
         kept = k.stdout.strip() if k.returncode == 0 else ""
-        if not kept: die(f"{tid}: the add-on {name} needs its own licence ({cid}): give its licence file (.rif or work.bin, --license), or keep yours first (vitarecomp licenses)")
+        if not kept: die(f"{tid}: the add-on {name} needs its own licence ({cid}): give its licence file (.rif, work.bin or a zRIF line in a text file, --license), or keep yours first (vitarecomp licenses)")
         args = args + ["--license", kept]; say(f"{tid}: the add-on's licence, kept ({cid})")
     tmp = os.path.join(DUMP, "decrypted", f".addon.{os.getpid()}"); rif = tmp + ".rif"
     rmtree(tmp); rmtree(rif); os.makedirs(os.path.join(DUMP, "decrypted"), exist_ok=True)
@@ -436,7 +437,7 @@ def cmd_add(T, rest):
         if kept: args += ["--license", kept]; say(f"{tid}: its licence, kept ({cid})")
         elif kind == "update" and os.path.isfile(os.path.join(W, "license.rif")): args += ["--license", os.path.join(W, "license.rif")]
         elif kind == "update": die(f"{tid}: add the game itself first -- its update decrypts with the game's licence")
-        else: say(f"{tid}: no licence kept for it ({cid}): a copy that needs one stops below -- give its licence file (.rif or work.bin, --license), or keep yours first (vitarecomp licenses)")
+        else: say(f"{tid}: no licence kept for it ({cid}): a copy that needs one stops below -- give its licence file (.rif, work.bin or a zRIF line in a text file, --license), or keep yours first (vitarecomp licenses)")
     tmp = os.path.join(DUMP, "decrypted", f".add.{os.getpid()}"); rif = tmp + ".rif"
     rmtree(tmp); rmtree(rif); os.makedirs(os.path.join(DUMP, "decrypted"), exist_ok=True)
     if run([PY, "-m", "vitadecrypt.game", os.path.realpath(T), tmp] + args + ["--license-out", rif] + (["--link-dirs"] if in_place else []), env=env_with(TOOLS_ENV), check=False).returncode:
