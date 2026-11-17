@@ -6,7 +6,9 @@ NAME = "Resistance: Burning Skies"
 REGION = "US"
 SPLIT = 24
 MODULES = "libc libgxm_es4 libgpu_es4 libfios2 np_matching2 libssl np_common librudp"
-RUN_ENV = "RECOMP_RENDER_SCALE=1 RECOMP_FRAME_RATE=30 RECOMP_NGS_REVERB=0 RECOMP_GAME_OPTIONS=skip_mission_intros"
+# RECOMP_FRAME_RATES: 30 / 60 / 120 offered in the F10 menu (the EU pack pins 30); owner 2026-11-17 at 60 and 120: normal
+# game speed, smooth (the game steps by the real frame time)
+RUN_ENV = "RECOMP_RENDER_SCALE=1 RECOMP_FRAME_RATES=30,60,120 RECOMP_NGS_REVERB=0 RECOMP_GAME_OPTIONS=skip_mission_intros"
 TEST_ENV = "RECOMP_GFX=soft RECOMP_SHADERS=interp RECOMP_CLOCK=fixed"
 TEST_FRAMES = 600 # title screen (theirs); FMOD's ATRAC9 streams are active before this frame
 TEST_TIMEOUT = 360
