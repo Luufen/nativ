@@ -849,8 +849,27 @@ static void builtin_env(void) {
 }
 #ifdef __ANDROID__
 #include <SDL3/SDL_main.h>   /* (main becomes SDL_main, the function SDL's Java side starts in libmain.so) */
+#include <SDL3/SDL_hints.h>
+#include <android/log.h>
+#include <unistd.h>
+/* an exported game (vitarecomp export-apk): NativActivity names its data folder (NATIV_DATA: the app's external files
+ * folder -- fs/app0 pushed there, the saves, settings.ini, captures) -- the working directory `vitarecomp run` gives
+ * the game elsewhere; stderr into session.log there (Android has no console; the one before kept as
+ * session.prev.log); the Back button reaches the game as a key (window.c: it opens the menu, as F10) */
+static void android_start(void) {
+	const char *d = getenv("NATIV_DATA");
+	if (d && *d && chdir(d) == 0) {
+		rename("session.log", "session.prev.log");
+		if (freopen("session.log", "w", stderr)) { setvbuf(stderr, 0, _IOLBF, 0); dup2(fileno(stderr), 1); }
+		__android_log_print(ANDROID_LOG_INFO, "Nativ", "data folder %s; the game's log: %s/session.log", d, d);
+	} else __android_log_print(ANDROID_LOG_WARN, "Nativ", "no data folder (NATIV_DATA %s): the game runs in the app's own folder", d ? d : "unset");
+	SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+}
 #endif
 int main(int argc, char **argv) {
+#ifdef __ANDROID__
+	android_start();
+#endif
 	builtin_env();
 	atexit(gaps_report);   /* GAPS-01: the GAPS line + table and gaps.json at the end of every run */
 #ifdef __linux__

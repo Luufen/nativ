@@ -1172,7 +1172,11 @@ void window_run(void *(*fn)(void *), void *arg) {
 	 * scripted test that cares what the window looks like */
 	{ char b[16]; settings_str("aspect", "fit", b, sizeof b);
 	  aspect_mode = !strcmp(b, "stretch") ? ASPECT_STRETCH : !strcmp(b, "fill") ? ASPECT_FILL : ASPECT_FIT; }   /* window_set_aspect also saves: read it in directly instead, nothing changed yet */
+#ifdef __ANDROID__
+	SDL_SetWindowFullscreen(win, true);   /* (a device: the whole screen, the system bars hidden -- no window to have) */
+#else
 	if (settings_int("fullscreen", 0)) SDL_SetWindowFullscreen(win, true);
+#endif
 	if (gpu) overlay_init(gpu, win, SDL_GetGPUSwapchainTextureFormat(gpu, win));
 	SDL_Gamepad *pad = 0;
 	int pad_back = 0, pad_start = 0, pad_combo_latch = 0, pad_start_solo = 0;   /* (U12c) solo: Start pressed and released with no Select */
@@ -1201,7 +1205,7 @@ void window_run(void *(*fn)(void *), void *arg) {
 			/* the overlay itself: always live, open or not, so it can always be reached and always
 			 * closed. Opening (or re-opening by the same gamepad combo) clears whatever buttons/touch
 			 * were down so the game never sees them as still held on resume. */
-			if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F10) { overlay_toggle(); if (overlay_is_open()) { buttons = 0; touch_down = 0; gamepad_touch_release(); } }
+			if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && (e.key.key == SDLK_F10 || e.key.key == SDLK_AC_BACK)) { overlay_toggle();   /* (AC_BACK: Android's Back button, main.c's android_start) */ if (overlay_is_open()) { buttons = 0; touch_down = 0; gamepad_touch_release(); } }
 			if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_ESCAPE) { if (overlay_is_open()) { if (!overlay_modal_open()) overlay_close(); } else overlay_bar_dismiss(); }   /* (closed: Escape hides the menu bar and its menus; a modal up: it cancels instead -- U6) */
 			/* the PS button's row (Guide by default; PAD-MAP: any button, a trigger too) -- not while the menu takes a binding */
 			{	int ps = e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && pad_map[PADB_PS] >= 0 && e.gbutton.button == pad_map[PADB_PS];

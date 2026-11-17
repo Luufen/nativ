@@ -29,7 +29,7 @@
                                             handheld (a Steam Deck; pipeline/appimage.py): compiled once more for its
                                             processor (EXPORT_CPU, default znver2) as <base>_deck, packed with the
                                             game's images and app0 -- private: it holds the game. On Windows: in WSL
-  vitarecomp export-apk <title> <out.apk> [--abi arm64|x86_64|all]   a built game as an APK for the player's OWN
+  vitarecomp export-apk <title> <out.apk> [--abi arm64|x86_64|all] [--env NAME=VALUE]   a built game as an APK for the player's OWN
                                             Android device (pipeline/apk.py): compiled for Android (arm64: a device,
                                             x86_64: the emulator), packed with the game's images, signed with the
                                             player's own key; app0 goes to the device apart (adb push) -- private. In WSL
@@ -1356,14 +1356,18 @@ def cmd_export_apk(T, out, rest):
     On Windows it all runs in WSL (the Android toolchain: ATIV_ANDROID_TOOLCHAIN, else ~/toolchains/ativ-android, made by
     runtime/platform/android/setup-toolchain.sh)"""
     if not out.endswith(".apk"): die("export-apk: the output is a file named <something>.apk")
-    abis = ["arm64"]
+    abis, extra_env = ["arm64"], []
     it = iter(rest)
     for a in it:
         if a == "--abi":
             v = next(it, "")
             abis = list(apk.ABIS) if v == "all" else [v]
             if any(x not in apk.ABIS for x in abis): die(f"export-apk: --abi {v}: arm64 (a device), x86_64 (the emulator) or all")
-        else: die(f"export-apk: unknown option {a} (--abi arm64|x86_64|all)")
+        elif a == "--env":   # (a setting for this APK's game after the pack's: RECOMP_GFX=soft, RECOMP_LOG=1 ...)
+            v = next(it, "")
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=[^\n]*", v): die(f"export-apk: --env {v!r}: NAME=VALUE")
+            extra_env.append(tuple(v.split("=", 1)))
+        else: die(f"export-apk: unknown option {a} (--abi arm64|x86_64|all, --env NAME=VALUE)")
     say("export: " + apk.NOTICE)
     if WINDOWS:
         say("export: running in WSL (the Android build and the packing)")
@@ -1403,6 +1407,7 @@ def cmd_export_apk(T, out, rest):
     env += [(k, v) for k, v in play_fixed_env(g, "$FILES/shaders.txt") if k != "RECOMP_ICON"]
     if g.MODS: env.append(("RECOMP_MODULES", ",".join(f"$FILES/{m}.img" for m in g.MODS)))
     if g.LMODS: env.append(("RECOMP_LOAD_MODULES", ";".join(f"{g.LPATH[m]}=$FILES/{m}.img" for m in g.LMODS)))
+    env += extra_env
     work = tempfile.mkdtemp(prefix="nativ-apk-")
     try:
         launch = os.path.join(work, "launch.txt")
