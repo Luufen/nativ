@@ -22,6 +22,17 @@ static inline void menu_hint_pad_line(char *out, size_t n, int pad_type, int dec
 	} else snprintf(out, n, "Controller: [Start] + [Select], or [Menu] + [View]");
 }
 
+/* the touch screen's line; android: an exported game on an Android device, where the system's Back opens the menu
+ * (window.c) -- the way the owner looked for first on the tablet (EXPORT-APK A5) */
+static inline const char *menu_hint_touch_line(int android) {
+	return android ? "Touch: [Back] (swipe in from the side), or the tab at the top" : "Touch: the tab at the top, then Game > Full menu";
+}
+#ifdef __ANDROID__
+#define MENU_HINT_ANDROID 1
+#else
+#define MENU_HINT_ANDROID 0
+#endif
+
 /* out: the hint's body (lines split by '\n'); keyboard / mouse: there now; pad_type: the player's controller's SDL gamepad
  * type, -1 for none; deck: Steam says this is a Steam Deck; touch: a touch screen is there; osb: the on-screen buttons can
  * come up by a touch (their setting isn't off and no controller is connected) -- then a line says where they are switched
@@ -29,7 +40,7 @@ static inline void menu_hint_pad_line(char *out, size_t n, int pad_type, int dec
 static inline int menu_hint_text(char *out, size_t n, int keyboard, int mouse, int pad_type, int deck, int touch, int osb) {
 	int lines = 0; size_t at = 0;
 	char kb[64], pad[96];
-	const char *const tl = "Touch: the tab at the top, then Game > Full menu";
+	const char *const tl = menu_hint_touch_line(MENU_HINT_ANDROID);
 	out[0] = 0;
 #define MH_LINE(...) do { int w = snprintf(out + at, at < n ? n - at : 0, "%s", lines ? "\n" : ""); at += w > 0 ? (size_t)w : 0; \
 	w = snprintf(out + at, at < n ? n - at : 0, __VA_ARGS__); at += w > 0 ? (size_t)w : 0; lines++; } while (0)

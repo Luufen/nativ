@@ -28,6 +28,8 @@ int main(void) {
 	CHECK(HAS(line(b, 0, l), "Keyboard: [F10]") && HAS(l, "mouse"));
 	CHECK(HAS(line(b, 1, l), "Controller: [Start] + [Select]"));   /* (UI-02a: no controller line without a pad) */
 	CHECK(HAS(line(b, 2, l), "Touch: the tab at the top, then Game > Full menu"));   /* (UI-02a: no touch line without a touch screen) */
+	/* EXPORT-APK A5: on an Android device the touch line names the system's Back first (it opens the menu there) */
+	CHECK(HAS(menu_hint_touch_line(1), "[Back]") && HAS(menu_hint_touch_line(1), "the tab at the top") && !HAS(menu_hint_touch_line(0), "Back"));
 	/* an Xbox pad: its own names, second (keyboard there too) */
 	n = menu_hint_text(b, sizeof b, 1, 1, SDL_GAMEPAD_TYPE_XBOXONE, 0, 0, 0);
 	CHECK(n == 3 && HAS(line(b, 1, l), "Controller: [Menu] + [View]") && HAS(line(b, 2, l), "Touch"));
