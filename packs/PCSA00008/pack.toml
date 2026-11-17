@@ -19,3 +19,4 @@ status = "supported"
 [versions."1.02"]
 sha256 = "db59fe44159accd4821e27ac30de2669da297bb9e010c57ef6b55747c2f82d8e"
 status = "recommended"
+FUNCTION_SEEDS = "0x8104b0cc:thumb 0x8104b138:thumb 0x8104b22a:thumb 0x8104b236:thumb 0x8107109c:thumb 0x81071108:thumb 0x81071200:thumb 0x8107120c:thumb 0x81151648:thumb"   # the EU 1.02 pack's seeds (Tzeentchnet): the same addresses here (0x8104b22a missed on New Game, owner run 2026-11-17)
