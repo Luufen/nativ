@@ -1,9 +1,11 @@
 """A built game as an APK for the player's own Android device: vitarecomp export-apk (EXPORT-APK A3).
 
 The APK holds the compiled game (lib/<abi>/libmain.so, made by runtime/build.py TARGET=android-<abi>) and its images
-from the player's copy: it is for their own device, never for anyone else. The game's files (app0) are not in it: they
-go to the device's Android/data/<package>/files/fs/app0 (adb push). Signed with a key of the player's own, made once.
-The pieces, each testable without a game (dev/test_export_apk.py):
+from the player's copy: it is for their own device, never for anyone else. The player copies it to the device and
+installs it. The game's files (app0) come one of two ways (SetupActivity puts them into
+Android/data/<package>/files/fs/app0 at the first start): inside the APK (assets/nativ-data/app0.zip) when they are
+small enough, else as a data file beside it (<name>-data.zip) that the player copies too and picks there. Signed with
+a key of the player's own, made once. The pieces, each testable without a game (dev/test_export_apk.py):
 
   package_id()    local.nativ.<title id>: one app per game
   manifest_text() the AndroidManifest.xml: SDL's Activity settings, our NativActivity (runtime/platform/android)
@@ -11,6 +13,7 @@ The pieces, each testable without a game (dev/test_export_apk.py):
   build_apk()     aapt2 (manifest, icon, assets), javac + d8 (NativActivity with SDL's Java side), the libraries,
                   zipalign, apksigner -- the Android toolchain's (runtime/platform/android/setup-toolchain.sh)
 """
+import hashlib
 import os
 import re
 import shutil
@@ -25,7 +28,9 @@ BUILD_TOOLS = "36.0.0"
 PLATFORM = "36"
 MIN_SDK = 29
 ABIS = {"arm64": "arm64-v8a", "x86_64": "x86_64"}
-ACTIVITY = "org.projectnativ.app.NativActivity"
+ACTIVITY = "org.projectnativ.app.NativActivity"   # (the game: SDL's Activity)
+SETUP = "org.projectnativ.app.SetupActivity"      # (the launcher's entry: the game's files first, then the game)
+INSIDE_MAX = 1_500_000_000   # app0 up to this size goes inside the APK (export-apk --data auto); bigger: a data file apart
 KEY_ALIAS = "nativ"
 KEY_PASS = "nativ-local"   # (a key that signs the player's own sideloaded apps on their own machine: not a secret kept)
 
@@ -65,14 +70,23 @@ def manifest_text(package, label, version_code=1, version_name="1.0", target_sdk
     <application android:label="{escape(label, {'"': '&quot;'})}" android:icon="@mipmap/icon" android:allowBackup="false"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen" android:hardwareAccelerated="true"
         android:extractNativeLibs="true" android:enableOnBackInvokedCallback="false">
-        <activity android:name="{ACTIVITY}" android:label="{escape(label, {'"': '&quot;'})}"
-            android:alwaysRetainTaskState="true" android:launchMode="singleInstance" android:screenOrientation="sensorLandscape"
-            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
-            android:preferMinimalPostProcessing="true" android:exported="true">
+        <activity android:name="{SETUP}" android:label="{escape(label, {'"': '&quot;'})}" android:exported="true"
+            android:launchMode="singleTask" android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="application/zip" />
+            </intent-filter>
+        </activity>
+        <activity android:name="{ACTIVITY}" android:label="{escape(label, {'"': '&quot;'})}"
+            android:alwaysRetainTaskState="true" android:launchMode="singleInstance" android:screenOrientation="sensorLandscape"
+            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:preferMinimalPostProcessing="true" android:exported="false">
         </activity>
     </application>
 </manifest>
@@ -91,6 +105,45 @@ def launch_text(args, env):
     return "\n".join(lines) + "\n"
 
 
+def app0_files(app0):
+    """(relative path with /, size) of every file under app0, sorted"""
+    out = []
+    for d, sub, names in os.walk(app0):
+        sub.sort()
+        for n in sorted(names):
+            p = os.path.join(d, n)
+            out.append((os.path.relpath(p, app0).replace(os.sep, "/"), os.path.getsize(p)))
+    return sorted(out)
+
+
+def data_id(app0, title):
+    """which game files these are: the title, every file's path and size, and eboot.bin's content (sha256, 32 hex)"""
+    h = hashlib.sha256(title.encode() + b"\0")
+    for rel, size in app0_files(app0): h.update(f"{rel}\0{size}\n".encode())
+    eboot = os.path.join(app0, "eboot.bin")
+    if os.path.isfile(eboot):
+        with open(eboot, "rb") as f:
+            for b in iter(lambda: f.read(1 << 20), b""): h.update(b)
+    return h.hexdigest()[:32]
+
+
+def write_data_zip(app0, out, title, did):
+    """app0 as the zip SetupActivity unpacks: nativ-data.txt first (title, id), then app0/... stored (game files are
+    mostly compressed already; storing keeps the export and the unpacking fast); zip64 for big games"""
+    tmp = out + ".part"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+        z.writestr("nativ-data.txt", f"title {title}\nid {did}\n")
+        for rel, _size in app0_files(app0): z.write(os.path.join(app0, rel), "app0/" + rel)
+    os.replace(tmp, out)
+    return out
+
+
+def data_text(mode, did, file, size):
+    """assets/nativ/data.txt: how the game's files come (SetupActivity)"""
+    if mode not in ("inside", "apart"): raise ValueError(mode)
+    return f"mode {mode}\nid {did}\nfile {file}\nbytes {int(size)}\n"
+
+
 def ensure_key(keystore, t, run=subprocess.run):
     """the player's signing key, made once (keytool: RSA 2048, 10000 days)"""
     if os.path.isfile(keystore): return False
@@ -102,8 +155,9 @@ def ensure_key(keystore, t, run=subprocess.run):
     return True
 
 
-def build_apk(out, *, package, label, libs, assets, icon, keystore, t, java_src, version_code=1, version_name="1.0", work=None):
-    """libs: {abi: [paths of .so files]}; assets: (source, name) pairs under assets/nativ/; icon: a PNG"""
+def build_apk(out, *, package, label, libs, assets, icon, keystore, t, java_src, version_code=1, version_name="1.0", work=None, extra_assets=()):
+    """libs: {abi: [paths of .so files]}; assets: (source, name) pairs under assets/nativ/; extra_assets: (source, path)
+    pairs under assets/ (the game's files inside: nativ-data/app0.zip); java_src: the Java sources; icon: a PNG"""
     env = dict(os.environ, JAVA_HOME=t["java_home"], PATH=os.path.join(t["java_home"], "bin") + os.pathsep + os.environ.get("PATH", ""))
     def run(argv): subprocess.run(argv, check=True, env=env)
     w = work or tempfile.mkdtemp(prefix="nativ-apk-")
@@ -112,16 +166,20 @@ def build_apk(out, *, package, label, libs, assets, icon, keystore, t, java_src,
         shutil.copyfile(icon, os.path.join(w, "res", "mipmap", "icon.png"))
         a = os.path.join(w, "assets", "nativ"); os.makedirs(a, exist_ok=True)
         for src, name in assets: shutil.copyfile(src, os.path.join(a, name))
+        for src, rel in extra_assets:
+            p = os.path.join(w, "assets", rel); os.makedirs(os.path.dirname(p), exist_ok=True)
+            try: os.link(src, p)   # (a big zip: no copy where a link will do)
+            except OSError: shutil.copyfile(src, p)
         with open(os.path.join(w, "AndroidManifest.xml"), "w", encoding="utf-8", newline="\n") as f:
             f.write(manifest_text(package, label, version_code, version_name))
         run([t["aapt2"], "compile", "-o", os.path.join(w, "res.zip"), "--dir", os.path.join(w, "res")])
         base = os.path.join(w, "base.apk")
         run([t["aapt2"], "link", "-o", base, "-I", t["jar"], "--manifest", os.path.join(w, "AndroidManifest.xml"),
              "-A", os.path.join(w, "assets"), "--min-sdk-version", str(MIN_SDK), "--target-sdk-version", PLATFORM,
-             "--version-code", str(version_code), "--version-name", version_name, os.path.join(w, "res.zip")])
+             "--version-code", str(version_code), "--version-name", version_name, "-0", "zip", os.path.join(w, "res.zip")])   # (-0 zip: the data zip stored as it is)
         cls = os.path.join(w, "classes"); os.makedirs(cls, exist_ok=True)
         run([os.path.join(t["java_home"], "bin", "javac"), "-nowarn", "--release", "11", "-encoding", "UTF-8",
-             "-classpath", t["jar"] + os.pathsep + t["sdl_jar"], "-d", cls, java_src])
+             "-classpath", t["jar"] + os.pathsep + t["sdl_jar"], "-d", cls] + ([java_src] if isinstance(java_src, str) else list(java_src)))
         ours = os.path.join(w, "ours.jar")
         run([os.path.join(t["java_home"], "bin", "jar"), "cf", ours, "-C", cls, "."])
         dex = os.path.join(w, "dex"); os.makedirs(dex, exist_ok=True)

@@ -29,10 +29,11 @@
                                             handheld (a Steam Deck; pipeline/appimage.py): compiled once more for its
                                             processor (EXPORT_CPU, default znver2) as <base>_deck, packed with the
                                             game's images and app0 -- private: it holds the game. On Windows: in WSL
-  vitarecomp export-apk <title> <out.apk> [--abi arm64|x86_64|all] [--env NAME=VALUE]   a built game as an APK for the player's OWN
+  vitarecomp export-apk <title> <out.apk> [--abi arm64|x86_64|all] [--data auto|inside|apart] [--install] [--env NAME=VALUE]   a built game as an APK for the player's OWN
                                             Android device (pipeline/apk.py): compiled for Android (arm64: a device,
                                             x86_64: the emulator), packed with the game's images, signed with the
-                                            player's own key; app0 goes to the device apart (adb push) -- private. In WSL
+                                            player's own key; the game's files inside it, or beside it as <name>-data.zip
+                                            (big games); --install: onto the USB device too (adb) -- private. In WSL
   vitarecomp export-win <title> <out-folder> [--cpu LEVEL] [--zip] [--camera light|webcam|dark]   a built game as a folder for the
                                             player's OWN other Windows PCs (pipeline/portable.py): compiled once
                                             more for a CPU level other PCs have (default x86-64-v3; native and
@@ -135,6 +136,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 import zlib
 
 R = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(R)   # (pipeline/: this; the repository above it)
@@ -1348,15 +1350,55 @@ def cmd_export_appimage(T, out, rest):
     return 0
 
 
+def find_adb():
+    """adb: ADB, else on PATH, else the Android SDK's where Android Studio puts it ("" when none)"""
+    if ENV.get("ADB"): return ENV["ADB"]
+    if shutil.which("adb"): return shutil.which("adb")
+    for d in (os.path.join(ENV.get("LOCALAPPDATA", ""), "Android", "Sdk"), ENV.get("ANDROID_HOME", ""), ENV.get("ANDROID_SDK_ROOT", ""),
+              os.path.expanduser("~/Android/Sdk"), os.path.expanduser("~/Library/Android/sdk")):
+        p = os.path.join(d, "platform-tools", "adb" + (".exe" if WINDOWS else ""))
+        if d and os.path.isfile(p): return p
+    return ""
+
+
+def apk_install(g, out, adb):
+    """the exported APK onto the one device connected by USB (debugging on), and the game's files with it -- app0 pushed
+    into the app's data folder with its app0.id, so the first start has nothing to unpack or pick"""
+    devs = [l.split()[0] for l in subprocess.run([adb, "devices"], capture_output=True, text=True).stdout.splitlines()[1:] if l.strip().endswith("\tdevice")]
+    if len(devs) != 1: die(f"export-apk --install: {len(devs)} devices ready (adb devices): connect one, with USB debugging on and this computer allowed")
+    with zipfile.ZipFile(out) as z: info = dict(l.split(" ", 1) for l in z.read("assets/nativ/data.txt").decode().splitlines() if " " in l)
+    pkg = apk.package_id(g.TITLE_ID); D = f"/sdcard/Android/data/{pkg}/files"
+    def sh(*a): return subprocess.run([adb, "shell"] + list(a), capture_output=True, text=True).stdout.strip()
+    say(f"install: {os.path.basename(out)} onto {devs[0]}")
+    r = subprocess.run([adb, "install", "-r", out], capture_output=True, text=True)
+    if "Success" not in r.stdout: die(f"export-apk --install: adb install failed: {(r.stdout + r.stderr).strip()[-300:]}")
+    sh("am", "start", "-W", "-n", f"{pkg}/{apk.SETUP}"); time.sleep(2); sh("am", "force-stop", pkg)   # (Android makes the app's data folder)
+    app0 = os.path.realpath(os.path.join(g.W, "app0")); n = len(apk.app0_files(app0))
+    if sh(f"cat {D}/fs/app0.id 2>/dev/null") == info["id"] and sh(f"find {D}/fs/app0 -type f | wc -l") == str(n):
+        say("install: the game's files are there already")
+    else:
+        say(f"install: copying the game's files ({sum(s for _r, s in apk.app0_files(app0)) / 1e6:.0f} MB)")
+        sh(f"rm -rf {D}/fs/app0 {D}/fs/app0.id; mkdir -p {D}/fs")
+        if subprocess.run([adb, "push", app0, f"{D}/fs/"], capture_output=True).returncode: die("export-apk --install: adb push of the game's files failed")
+        if os.path.basename(app0) != "app0": sh(f"mv {D}/fs/{os.path.basename(app0)} {D}/fs/app0")
+        got = sh(f"find {D}/fs/app0 -type f | wc -l")
+        if got != str(n): die(f"export-apk --install: {got} of {n} game files arrived")
+        sh(f"echo {info['id']} > {D}/fs/app0.id")
+    say(f"installed {g.NAME} on {devs[0]}: start it from the device's app list")
+
+
 def cmd_export_apk(T, out, rest):
     """the game as an APK for the player's own Android device (pipeline/apk.py; EXPORT-APK): its code as it is (made by the
     launcher's Build: nothing is recompiled) compiled for Android (runtime/build.py TARGET=android-<abi>: arm64 for a
     device, x86_64 for the emulator), packed with the game's images and signed with the player's own key (made once:
-    <library>/android/export.keystore). app0 is not in it: it goes to the device's Android/data/<package>/files/fs/app0.
-    On Windows it all runs in WSL (the Android toolchain: ATIV_ANDROID_TOOLCHAIN, else ~/toolchains/ativ-android, made by
-    runtime/platform/android/setup-toolchain.sh)"""
+    <library>/android/export.keystore). The player copies the APK to the device and installs it. The game's files:
+    --data inside (in the APK, unpacked at the first start), apart (<name>-data.zip beside the APK, copied too and picked
+    at the first start) or auto (inside up to apk.INSIDE_MAX, 1.5 GB). --install: also onto the device connected by USB
+    (adb), with the game's files. On Windows the build and packing run in WSL (the Android toolchain:
+    ATIV_ANDROID_TOOLCHAIN, else ~/toolchains/ativ-android, made by runtime/platform/android/setup-toolchain.sh); the
+    install runs here (adb sees the USB device)"""
     if not out.endswith(".apk"): die("export-apk: the output is a file named <something>.apk")
-    abis, extra_env = ["arm64"], []
+    abis, extra_env, data_mode, install = ["arm64"], [], "auto", False
     it = iter(rest)
     for a in it:
         if a == "--abi":
@@ -1367,7 +1409,13 @@ def cmd_export_apk(T, out, rest):
             v = next(it, "")
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=[^\n]*", v): die(f"export-apk: --env {v!r}: NAME=VALUE")
             extra_env.append(tuple(v.split("=", 1)))
-        else: die(f"export-apk: unknown option {a} (--abi arm64|x86_64|all, --env NAME=VALUE)")
+        elif a == "--data":
+            data_mode = next(it, "")
+            if data_mode not in ("auto", "inside", "apart"): die(f"export-apk: --data {data_mode}: auto, inside or apart")
+        elif a == "--install": install = True
+        else: die(f"export-apk: unknown option {a} (--abi arm64|x86_64|all, --data auto|inside|apart, --install, --env NAME=VALUE)")
+    adb = find_adb() if install else ""
+    if install and not adb: die("export-apk --install: no adb found (Android's platform-tools; ADB=<path>)")
     say("export: " + apk.NOTICE)
     if WINDOWS:
         say("export: running in WSL (the Android build and the packing)")
@@ -1378,8 +1426,10 @@ def cmd_export_apk(T, out, rest):
         for i, kv in enumerate(keep):   # (paths as WSL sees them)
             k, _, v = kv.partition("=")
             if k == "ATIV_PACKS" and re.match(r"[A-Za-z]:[\\/]", v): keep[i] = f"{k}={wsl_path(v)}"
-        return run(["wsl.exe", "-e", "env", f"ATIV_DUMP={wdump}", "PYTHONUTF8=1"] + keep +
-                   ["python3", wroot + "/pipeline/vitarecomp.py", "export-apk", T, wout] + rest, check=False).returncode
+        rc = run(["wsl.exe", "-e", "env", f"ATIV_DUMP={wdump}", "PYTHONUTF8=1"] + keep +
+                 ["python3", wroot + "/pipeline/vitarecomp.py", "export-apk", T, wout] + [a for a in rest if a != "--install"], check=False).returncode
+        if rc == 0 and install: apk_install(Game(T, "export-apk"), os.path.abspath(out), adb)
+        return rc
     g = Game(T, "export-apk")
     if not os.path.isfile(os.path.join(g.W, "elf", g.ELF)): die(f"{T}: not added yet (vitarecomp add, or + Add game in the launcher)")
     stamp = os.path.join(g.OUT, ".recompile_inputs")
@@ -1388,15 +1438,19 @@ def cmd_export_apk(T, out, rest):
     try: t = apk.toolchain()
     except RuntimeError as e: die(f"export-apk: {e}")
     pkg = apk.package_id(g.TITLE_ID)
+    app0 = os.path.realpath(os.path.join(g.W, "app0"))
+    files = apk.app0_files(app0); size = sum(s for _r, s in files)
+    mode = data_mode if data_mode != "auto" else ("inside" if size <= apk.INSIDE_MAX else "apart")
+    data_name = os.path.basename(out)[:-4] + "-data.zip"; data_out = os.path.join(os.path.dirname(os.path.abspath(out)), data_name)
+    steps = len(abis) + 2
     libs = {}
     for i, a in enumerate(abis):
-        say(f"export {i + 1}/{len(abis) + 1}: compiling {g.NAME} for Android ({apk.ABIS[a]}); the first time takes as long as a build")
+        say(f"export {i + 1}/{steps}: compiling {g.NAME} for Android ({apk.ABIS[a]}); the first time takes as long as a build")
         run(SELF + ["build", T], env=env_with({"TARGET": "android-" + a}))
         d = os.path.join(g.OUT, "android-" + apk.ABIS[a])
         libs[apk.ABIS[a]] = [os.path.join(d, "libSDL3.so"), os.path.join(d, "libmain.so")]
         for f in libs[apk.ABIS[a]]:
             if not os.path.isfile(f): die(f"export-apk: {f} wasn't made")
-    say(f"export {len(abis) + 1}/{len(abis) + 1}: packing and signing the APK ({pkg})")
     imgs = [g.BASE + ".img"] + [m + ".img" for m in g.MODS] + [m + ".img" for m in g.LMODS]
     assets = [(os.path.join(g.OUT, n), n) for n in imgs]
     for src, n in assets:
@@ -1410,6 +1464,13 @@ def cmd_export_apk(T, out, rest):
     env += extra_env
     work = tempfile.mkdtemp(prefix="nativ-apk-")
     try:
+        say(f"export {len(abis) + 1}/{steps}: the game's files ({size / 1e6:.0f} MB, {len(files)} files) "
+            + ("inside the APK" if mode == "inside" else f"as {data_name} beside it"))
+        did = apk.data_id(app0, g.TITLE_ID)
+        zpath = os.path.join(work, "app0.zip") if mode == "inside" else data_out
+        apk.write_data_zip(app0, zpath, g.TITLE_ID, did)
+        if mode == "inside" and os.path.isfile(data_out): os.remove(data_out)   # (an earlier export's, apart: not this APK's)
+        with open(os.path.join(work, "data.txt"), "w", encoding="utf-8", newline="\n") as f: f.write(apk.data_text(mode, did, data_name, size))
         launch = os.path.join(work, "launch.txt")
         with open(launch, "w", encoding="utf-8", newline="\n") as f:
             f.write(apk.launch_text([f"$FILES/{g.BASE}.img", g.entry(), "100000000000"], env))
@@ -1417,16 +1478,24 @@ def cmd_export_apk(T, out, rest):
         for src, _n in assets + [(launch, "")]:
             with open(src, "rb") as f: h.update(f.read())
         with open(os.path.join(work, "stamp.txt"), "w", newline="\n") as f: f.write(h.hexdigest() + "\n")
-        assets += [(launch, "launch.txt"), (os.path.join(work, "stamp.txt"), "stamp.txt")]
+        assets += [(launch, "launch.txt"), (os.path.join(work, "stamp.txt"), "stamp.txt"), (os.path.join(work, "data.txt"), "data.txt")]
         icon = os.path.join(g.W, "app0", "sce_sys", "icon0.png")
         if not os.path.isfile(icon): icon = os.path.join(ROOT, "assets", "brand", "png", "icon-256.png")
+        say(f"export {steps}/{steps}: packing and signing the APK ({pkg})")
+        jsrc = [os.path.join(RUNTIME, "platform", "android", n) for n in ("NativActivity.java", "SetupActivity.java")]
         apk.build_apk(out, package=pkg, label=g.NAME, libs=libs, assets=assets, icon=icon,
-                      keystore=os.path.join(DUMP, "android", "export.keystore"), t=t,
-                      java_src=os.path.join(RUNTIME, "platform", "android", "NativActivity.java"),
-                      version_name=g.VERSION or "1.0", work=os.path.join(work, "apk"))
+                      keystore=os.path.join(DUMP, "android", "export.keystore"), t=t, java_src=jsrc,
+                      version_name=g.VERSION or "1.0", work=os.path.join(work, "apk"),
+                      extra_assets=[(zpath, "nativ-data/app0.zip")] if mode == "inside" else [])
     finally: shutil.rmtree(work, ignore_errors=True)
-    say(f"exported {g.NAME} -> {out} ({os.path.getsize(out) / 1e6:.0f} MB, {pkg}); on the device: adb install {os.path.basename(out)}, "
-        f"then its files: adb push <app0> /sdcard/Android/data/{pkg}/files/fs/app0")
+    if mode == "inside":
+        say(f"exported {g.NAME} -> {out} ({os.path.getsize(out) / 1e6:.0f} MB, {pkg}, the game's files inside). On the device: "
+            "copy the APK there, open it to install (allow installing from that app once), start the game")
+    else:
+        say(f"exported {g.NAME} -> {out} ({os.path.getsize(out) / 1e6:.0f} MB, {pkg}) and its files {data_out} "
+            f"({os.path.getsize(data_out) / 1e6:.0f} MB). On the device: copy both there, install the APK, start the game "
+            f"and choose {data_name} when it asks")
+    if install: apk_install(g, out, adb)
     say("export: " + apk.NOTICE)
     return 0
 

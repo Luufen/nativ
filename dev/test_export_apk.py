@@ -36,12 +36,36 @@ act = m.find("application/activity")
 check("manifest: package, version, min SDK 29", m.get("package") == "local.nativ.pcsz00042" and m.get(A + "versionCode") == "3"
       and m.get(A + "versionName") == "1.00" and m.find("uses-sdk").get(A + "minSdkVersion") == "29")
 check("manifest: the label as given (& \" < > escaped in the file)", m.find("application").get(A + "label") == 'Game & "Two" <X>')
-check("manifest: NativActivity launches it, landscape", act.get(A + "name") == apk.ACTIVITY and act.get(A + "screenOrientation") == "sensorLandscape"
-      and act.find("intent-filter/category").get(A + "name") == "android.intent.category.LAUNCHER")
+acts = {a.get(A + "name"): a for a in m.findall("application/activity")}
+check("manifest: SetupActivity is the launcher entry (and opens a zip), landscape", apk.SETUP in acts and acts[apk.SETUP].get(A + "screenOrientation") == "sensorLandscape"
+      and any(c.get(A + "name") == "android.intent.category.LAUNCHER" for c in acts[apk.SETUP].iter("category"))
+      and any(d.get(A + "mimeType") == "application/zip" for d in acts[apk.SETUP].iter("data")))
+check("manifest: NativActivity (the game) is not exported and has no launcher entry", apk.ACTIVITY in acts and acts[apk.ACTIVITY].get(A + "exported") == "false"
+      and not list(acts[apk.ACTIVITY].iter("category")))
 lt = apk.launch_text(["$FILES/game.img", "81000000", "100000000000"], [("RECOMP_TITLE", "PCSZ00042"), ("A", "x=y")])
 check("launch.txt: an arg line per argument, an env line per setting", lt == "arg $FILES/game.img\narg 81000000\narg 100000000000\nenv RECOMP_TITLE=PCSZ00042\nenv A=x=y\n", lt)
 check("launch.txt: a line break in a value or a bad name is refused",
       raises(apk.launch_text, ["a\nb"], []) and raises(apk.launch_text, [], [("A B", "1")]) and raises(apk.launch_text, [], [("A", "1\n2")]))
+with tempfile.TemporaryDirectory() as tmp:   # the game's files: their id, the data zip, data.txt
+    a0 = os.path.join(tmp, "app0"); os.makedirs(os.path.join(a0, "sce_sys")); os.makedirs(os.path.join(a0, "data", "sub"))
+    open(os.path.join(a0, "eboot.bin"), "wb").write(b"\x7fSCE" + bytes(60))
+    open(os.path.join(a0, "sce_sys", "param.sfo"), "wb").write(b"\0PSF" + bytes(28))
+    open(os.path.join(a0, "data", "sub", ".hidden"), "wb").write(b"x" * 1000)   # (a dot name: aapt2 would drop it as an asset)
+    i1 = apk.data_id(a0, "PCSZ00042")
+    check("data id: 32 hex, the same twice, another for another title", re.fullmatch(r"[0-9a-f]{32}", i1) and apk.data_id(a0, "PCSZ00042") == i1 and apk.data_id(a0, "PCSZ00043") != i1)
+    open(os.path.join(a0, "eboot.bin"), "wb").write(b"\x7fSCE" + bytes(59) + b"\1")
+    check("data id: eboot.bin's content changes it (same size)", apk.data_id(a0, "PCSZ00042") != i1)
+    z = apk.write_data_zip(a0, os.path.join(tmp, "g-data.zip"), "PCSZ00042", "abc123")
+    zf = zipfile.ZipFile(z); names = zf.namelist()
+    check("data zip: nativ-data.txt first (title, id), then app0/... every file, stored", names[0] == "nativ-data.txt"
+          and zf.read(names[0]) == b"title PCSZ00042\nid abc123\n" and sorted(names[1:]) == ["app0/data/sub/.hidden", "app0/eboot.bin", "app0/sce_sys/param.sfo"]
+          and all(i.compress_type == zipfile.ZIP_STORED for i in zf.infolist()), names)
+    check("data.txt: mode, id, file, bytes; a wrong mode is refused", apk.data_text("apart", "abc", "g-data.zip", 1064) == "mode apart\nid abc\nfile g-data.zip\nbytes 1064\n"
+          and raises(apk.data_text, "both", "a", "b", 1))
+setup = open(os.path.join(ROOT, "runtime", "platform", "android", "SetupActivity.java"), encoding="utf-8").read()
+check("SetupActivity: data.txt's mode / id, the APK's zip or a picked one, nativ-data.txt checked first, app0.id",
+      '"nativ/data.txt"' in setup and '"nativ-data/app0.zip"' in setup and "ACTION_OPEN_DOCUMENT" in setup and '"nativ-data.txt"' in setup
+      and '"app0.id"' in setup and "NativActivity.class" in setup and 'startsWith("app0/")' in setup)
 java = open(os.path.join(ROOT, "runtime", "platform", "android", "NativActivity.java"), encoding="utf-8").read()
 check("NativActivity reads launch.txt's arg / env lines and names the data folder",
       'startsWith("arg ")' in java and 'startsWith("env ")' in java and "NATIV_DATA" in java and "extends SDLActivity" in java)
@@ -61,7 +85,9 @@ if t:
         ks = os.path.join(tmp, "key", "export.keystore"); out = os.path.join(tmp, "out", "game.apk")
         kw = dict(package="local.nativ.pcsz00001", label="Test & Game", libs={"arm64-v8a": [os.path.join(lib, "libSDL3.so"), os.path.join(lib, "libmain.so")]},
                   assets=[(img, "game.img"), (launch, "launch.txt"), (stamp, "stamp.txt")], icon=icon, keystore=ks, t=t,
-                  java_src=os.path.join(ROOT, "runtime", "platform", "android", "NativActivity.java"), version_name="1.00")
+                  java_src=[os.path.join(ROOT, "runtime", "platform", "android", n) for n in ("NativActivity.java", "SetupActivity.java")], version_name="1.00")
+        dz = os.path.join(tmp, "app0.zip"); zipfile.ZipFile(dz, "w").writestr("nativ-data.txt", "title PCSZ00001\nid x\n")
+        kw["extra_assets"] = [(dz, "nativ-data/app0.zip")]
         try: apk.build_apk(out, **kw); err = ""
         except subprocess.CalledProcessError as e: err = str(e)
         check("build_apk: an APK made, signed and verified (apksigner verify)", os.path.isfile(out) and not err, err)
@@ -69,14 +95,15 @@ if t:
             names = zipfile.ZipFile(out).namelist()
             check("APK: classes.dex, both libraries for arm64-v8a, the assets",
                   {"classes.dex", "lib/arm64-v8a/libmain.so", "lib/arm64-v8a/libSDL3.so", "assets/nativ/game.img",
-                   "assets/nativ/launch.txt", "assets/nativ/stamp.txt", "AndroidManifest.xml"} <= set(names), names)
+                   "assets/nativ/launch.txt", "assets/nativ/stamp.txt", "assets/nativ-data/app0.zip", "AndroidManifest.xml"} <= set(names), names)
+            check("APK: the game's files zip stored as it is (not compressed again)", zipfile.ZipFile(out).getinfo("assets/nativ-data/app0.zip").compress_type == zipfile.ZIP_STORED)
             check("APK: no .idsig left beside it", not os.path.exists(out + ".idsig"))
             dex = zipfile.ZipFile(out).read("classes.dex")
-            check("classes.dex: NativActivity and SDL's SDLActivity", b"Lorg/projectnativ/app/NativActivity;" in dex and b"Lorg/libsdl/app/SDLActivity;" in dex)
+            check("classes.dex: NativActivity, SetupActivity and SDL's SDLActivity", b"Lorg/projectnativ/app/NativActivity;" in dex and b"Lorg/projectnativ/app/SetupActivity;" in dex and b"Lorg/libsdl/app/SDLActivity;" in dex)
             b = subprocess.run([t["aapt2"], "dump", "badging", out], capture_output=True, text=True).stdout
-            check("aapt2 badging: package, label, SDK 29, launchable NativActivity, native code arm64-v8a",
+            check("aapt2 badging: package, label, SDK 29, launchable SetupActivity, native code arm64-v8a",
                   "package: name='local.nativ.pcsz00001'" in b and "application-label:'Test & Game'" in b and re.search(r"(?m)^(min)?[sS]dkVersion:'29'", b)
-                  and f"launchable-activity: name='{apk.ACTIVITY}'" in b and "native-code: 'arm64-v8a'" in b, b[:600])
+                  and f"launchable-activity: name='{apk.SETUP}'" in b and "native-code: 'arm64-v8a'" in b, b[:600])
             env = dict(os.environ, JAVA_HOME=t["java_home"], PATH=os.path.join(t["java_home"], "bin") + os.pathsep + os.environ.get("PATH", ""))
             cert = lambda p: re.findall(r"SHA-256 digest: (\w+)", subprocess.run([t["apksigner"], "verify", "--print-certs", p], capture_output=True, text=True, env=env).stdout)
             c1, kt = cert(out), os.path.getmtime(ks)
