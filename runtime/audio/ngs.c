@@ -22,6 +22,8 @@
 #include "hle_small.h"
 #ifndef _WIN32
 #include <dlfcn.h>
+#endif
+#if !defined(_WIN32) && !defined(__ANDROID__)   /* (bionic has backtrace() only from Android 13) */
 #include <execinfo.h>
 #endif
 #include "third_party/libatrac9/libatrac9.h"   /* MIT, vendored unmodified */
@@ -410,7 +412,7 @@ static int vo_log_on(void) { return vo_log_level() != 0; }
  * or from inside its sound engine */
 static void vo_chain(char *out, size_t n) {
 	out[0] = 0;
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__ANDROID__)
 	void *pc[96]; const int k = backtrace(pc, 96); size_t at = 0; int m = 0;
 	for (int i = 0; i < k && m < 24 && at < n; i++) {
 		Dl_info di; if (!dladdr(pc[i], &di) || !di.dli_sname || strncmp(di.dli_sname, "fn_", 3)) continue;

@@ -16,6 +16,11 @@ macOS with an install's toolchain (runtime/platform/macos/setup-toolchain.sh: SD
 ATIV_MAC_TOOLCHAIN, default <root>/toolchain when there is one): the libraries from there, Apple's clang and SDK from the Command
 Line Tools, libSDL3.0.dylib copied beside the binary; objects in obj_mt*/. Without one: Homebrew's, through pkg-config, as before.
 
+TARGET=android-arm64 | android-x86_64 (EXPORT-APK; on Linux or WSL): cross-compiled with the Android NDK
+(runtime/platform/android/setup-toolchain.sh; ATIV_ANDROID_TOOLCHAIN, default ~/toolchains/ativ-android) into a shared
+library, <out folder>/android-<abi>/libmain.so -- SDL's Java side starts its SDL_main --, libSDL3.so copied beside it;
+objects in obj_android_<abi>/. arm64-v8a for devices, x86_64 for the emulator.
+
 RECOMP_CPU=native (the default; a cross build is always generic) | generic | <a processor name>: what the code is compiled
 for; objects per processor in obj_<name>/ (obj_apple-m4, obj_win_znver5). RECOMP_CFLAGS: more code generation flags.
 """
@@ -100,6 +105,9 @@ def main(argv):
     BASE = os.path.abspath(argv[0]); OUT = os.path.abspath(argv[1])
     mods = argv[2:] or (ENV.get("RECOMP_MODULE_BASES") or "").split()
     WIN = HOSTED_WINDOWS or ENV.get("TARGET") == "windows"
+    ANDROID = {"android-arm64": "arm64-v8a", "android-x86_64": "x86_64"}.get(ENV.get("TARGET") or "")
+    if ENV.get("TARGET", "").startswith("android") and not ANDROID: die(f"build: TARGET {ENV['TARGET']}: android-arm64 or android-x86_64")
+    if ANDROID and HOSTED_WINDOWS: die("build: an Android build runs on Linux or WSL (runtime/platform/android/setup-toolchain.sh)")
     PROFILE, VERIFY = ENV.get("PROFILE"), ENV.get("VERIFY")
     # RECOMP_CPU: the processor the code is compiled for. native (the default when a machine builds for itself): its own,
     # every instruction it has. Each player compiles their own copy, so nothing has to run anywhere else; on x86-64 the
@@ -109,7 +117,7 @@ def main(argv):
     # RECOMP_CFLAGS: more code generation flags (experiments: -O3, -flto=thin). Each set keeps its own objects.
     # The objects are kept per processor, by the name the compiler resolves native to (apple-m4, znver5): an install moved
     # to another machine rebuilds rather than running instructions its processor may not have.
-    cross = WIN and not HOSTED_WINDOWS
+    cross = (WIN and not HOSTED_WINDOWS) or bool(ANDROID)
     cpu = "generic" if cross else (ENV.get("RECOMP_CPU") or "native")
     machine = platform.machine().lower()
     CPUFLAGS = [] if cpu == "generic" else [("-mcpu=" if machine in ("arm64", "aarch64") else "-march=") + cpu]
@@ -118,9 +126,20 @@ def main(argv):
     PLATFORM = [part("platform_posix")]
     exe = ".exe" if HOSTED_WINDOWS else ""
     CC, CXX = ENV.get("CC"), ENV.get("CXX")
-    LT = None if WIN or DARWIN else (ENV.get("ATIV_LINUX_TOOLCHAIN") or next((d for d in (os.path.join(ROOT, "toolchain"),) if os.path.isfile(os.path.join(d, "bin", "cc"))), None))
-    MT = (ENV.get("ATIV_MAC_TOOLCHAIN") or next((d for d in (os.path.join(ROOT, "toolchain"),) if os.path.isfile(os.path.join(d, "SDL3", "lib", "libSDL3.0.dylib"))), None)) if DARWIN and not WIN else None
-    if WIN:
+    LT = None if WIN or DARWIN or ANDROID else (ENV.get("ATIV_LINUX_TOOLCHAIN") or next((d for d in (os.path.join(ROOT, "toolchain"),) if os.path.isfile(os.path.join(d, "bin", "cc"))), None))
+    MT = (ENV.get("ATIV_MAC_TOOLCHAIN") or next((d for d in (os.path.join(ROOT, "toolchain"),) if os.path.isfile(os.path.join(d, "SDL3", "lib", "libSDL3.0.dylib"))), None)) if DARWIN and not WIN and not ANDROID else None
+    if ANDROID:
+        AT = ENV.get("ATIV_ANDROID_TOOLCHAIN") or os.path.join(os.path.expanduser("~"), "toolchains", "ativ-android")
+        AA = os.path.join(AT, ANDROID)
+        if not os.path.isfile(os.path.join(AA, "SDL3", "lib", "libSDL3.so")): die(f"no Android toolchain for {ANDROID} at {AT}: run runtime/platform/android/setup-toolchain.sh")
+        if VERIFY or PROFILE: die("VERIFY/PROFILE builds: not for Android")
+        CC = os.path.join(AT, "bin", ANDROID + "-cc"); CXX = os.path.join(AT, "bin", ANDROID + "-c++")
+        FLAGS += ["-fPIC", "-I", os.path.join(AA, "zlib", "include")]
+        sdl_cflags = ["-I" + os.path.join(AA, "SDL3", "include")]
+        sdl_libs = ["-L" + os.path.join(AA, "SDL3", "lib"), "-lSDL3"]
+        if not OUT.endswith(".so"): OUT = os.path.join(os.path.dirname(OUT), "android-" + ANDROID, "libmain.so")
+        os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    elif WIN:
         # (an install's own, beside the tools -- <root>/toolchain -- else the developer's)
         WT = ENV.get("ATIV_WIN_TOOLCHAIN") or next((d for d in (os.path.join(ROOT, "toolchain"),) if os.path.isdir(d)), os.path.join(os.path.expanduser("~"), "toolchains", "ativ-win"))
         cc = os.path.join(WT, "llvm-mingw", "bin", "x86_64-w64-mingw32-clang" + exe)
@@ -155,7 +174,7 @@ def main(argv):
     CXX = CXX or ("clang++" if shutil.which("clang++") else "c++")
     tag = "" if not CPUFLAGS else "_" + (resolved_cpu(CC, CPUFLAGS[0]) if cpu == "native" else cpu)
     if extra: tag += "_" + hashlib.sha1(" ".join(extra).encode()).hexdigest()[:8]
-    OBJ = os.path.join(os.path.dirname(BASE), "obj" + ("_prof" if PROFILE else "") + ("_verify" if VERIFY else "") + ("_win" if WIN else "") + ("_lt" if LT else "") + ("_mt" if MT else "") + tag)
+    OBJ = os.path.join(os.path.dirname(BASE), "obj" + ("_prof" if PROFILE else "") + ("_verify" if VERIFY else "") + ("_win" if WIN else "") + ("_android_" + ANDROID if ANDROID else "") + ("_lt" if LT else "") + ("_mt" if MT else "") + tag)
     os.makedirs(OBJ, exist_ok=True)
     # PROFILE=1: compile the guest code with its per-instruction hook (the host's profiler); objects in obj_prof/
     if PROFILE: FLAGS.append("-DRECOMP_TRACE")
@@ -223,6 +242,7 @@ def main(argv):
     IMGUI = os.path.join(ROOT, "third_party", "imgui"); IMGUIOBJ = os.path.join(OBJ, "imgui"); os.makedirs(IMGUIOBJ, exist_ok=True)
     CXXFLAGS = ["-O2", "-std=c++17", "-w", "-I", IMGUI, "-I", os.path.join(IMGUI, "backends")] + INCLUDES + sdl_cflags
     if WIN: CXXFLAGS += ["-D_FILE_OFFSET_BITS=64", "-include", os.path.join(RT, "platform", "win32_compat.h")]
+    if ANDROID: CXXFLAGS += ["-fPIC"]
     imgui_srcs = [os.path.join(IMGUI, f) for f in ("imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp", os.path.join("backends", "imgui_impl_sdl3.cpp"), os.path.join("backends", "imgui_impl_sdlgpu3.cpp"))] + [os.path.join(RT, "ui", f) for f in ("overlay.cpp", "savedlg_ui.cpp", "imedlg_ui.cpp")]
     # the touch card's input icons (third_party/kenney-prompts/prompts.png) as bytes overlay.cpp includes: a game's binary
     # carries them, wherever it runs from
@@ -261,6 +281,7 @@ def main(argv):
     # overlay.cpp + Dear ImGui are C++: cc (clang) won't pull its runtime in for object files alone, the
     # same reasoning as the spirv-cross block's own comment above
     CXXLIB = ["-lc++"] if DARWIN or WIN or LT else ["-lstdc++"]   # (zig's libc++ for the install's toolchain)
+    if ANDROID: CXXLIB = ["-static-libstdc++"]   # (the NDK's libc++ linked in: nothing but libmain.so and libSDL3.so ship)
     # libavcodec (FFmpeg): the H.264 decoder behind sceAvcdec* (video.c) -- linked where pkg-config finds it
     # (Homebrew's ffmpeg, a Linux distribution's libavcodec-dev); without it movies fail to start, as before
     AVCODEC = []
@@ -270,22 +291,25 @@ def main(argv):
     elif MT:   # the Mac toolchain's static FFmpeg (H.264 and AAC decoders)
         if os.path.isfile(os.path.join(MT, "ffmpeg", "lib", "libavcodec.a")): AVCODEC = ["-DRECOMP_AVCODEC", "-I" + os.path.join(MT, "ffmpeg", "include"), os.path.join(MT, "ffmpeg", "lib", "libavcodec.a"), os.path.join(MT, "ffmpeg", "lib", "libavutil.a")]
         if AVCODEC and os.path.isfile(os.path.join(MT, "ffmpeg", "lib", "libnativ_rawdec.a")): AVCODEC[1:1] = ["-DRECOMP_RAWDEC"]; AVCODEC.insert(3, os.path.join(MT, "ffmpeg", "lib", "libnativ_rawdec.a"))   # (sceAudiodec AAC)
-    elif not WIN and pkg_exists("libavcodec", "libavutil"):
+    elif not WIN and not ANDROID and pkg_exists("libavcodec", "libavutil"):   # (Android: no movies yet -- EXPORT-APK A9)
         AVCODEC = ["-DRECOMP_AVCODEC"] + out_of(["pkg-config", "--cflags", "--libs", "libavcodec", "libavutil"])
     elif WIN and os.path.isfile(os.path.join(WT, "ffmpeg", "lib", "libavcodec.a")):   # Windows: the toolchain's static FFmpeg, H.264 and AAC decoders (runtime/platform/win/setup-toolchain.sh)
         AVCODEC = ["-DRECOMP_AVCODEC", "-I" + os.path.join(WT, "ffmpeg", "include"), os.path.join(WT, "ffmpeg", "lib", "libavcodec.a"), os.path.join(WT, "ffmpeg", "lib", "libavutil.a"), "-lole32", "-luser32", "-lbcrypt"]
         # the AAC decoder's raw-frame shim (runtime/platform/ffmpeg/rawdec.c, built by setup-toolchain.sh): sceAudiodec AAC
         if os.path.isfile(os.path.join(WT, "ffmpeg", "lib", "libnativ_rawdec.a")): AVCODEC[1:1] = ["-DRECOMP_RAWDEC"]; AVCODEC.insert(3, os.path.join(WT, "ffmpeg", "lib", "libnativ_rawdec.a"))
     # libcurl: SceHttp (http.c) -- a game's HTTPS to its own (or a community) server; without it the HTTP calls stay stubs
-    CURL = ["-DRECOMP_CURL"] + out_of(["pkg-config", "--cflags", "--libs", "libcurl"]) if not WIN and not LT and not MT and pkg_exists("libcurl") else []   # (none in the Linux install's toolchain: stubs, as on Windows)
+    CURL = ["-DRECOMP_CURL"] + out_of(["pkg-config", "--cflags", "--libs", "libcurl"]) if not WIN and not LT and not MT and not ANDROID and pkg_exists("libcurl") else []   # (none in the Linux install's toolchain: stubs, as on Windows)
     if MT: CURL = ["-DRECOMP_CURL", "-lcurl"]   # (macOS's own libcurl, its headers in the SDK)
     LIBS = ["-lm", "-lpthread", os.path.join(LT, "zlib", "lib", "libz.a") if LT else "-lz", "-ldl"]
     if WIN: LIBS = ["-L" + os.path.join(WT, "zlib", "lib"), "-lz", "-lpthread", "-lwinmm", "-lws2_32", "-static", "-Wl,--error-limit=0"]   # (ws2_32: net.c's sockets)   # Windows: libc++, libunwind and winpthreads linked in -- only SDL3.dll ships beside the .exe
+    # Android: pthreads are in bionic's libc; a shared library that names every symbol it needs (--no-undefined: a missing
+    # one fails here, not at the app's start), 16 KB pages (Android 15's devices)
+    if ANDROID: LIBS = ["-lm", os.path.join(AA, "zlib", "lib", "libz.a"), "-ldl", "-llog", "-landroid", "-shared", "-Wl,--no-undefined", "-Wl,-z,max-page-size=16384", "-Wl,--error-limit=0"]
     # the game's RUN_ENV as the binary's defaults (vitarecomp build exports it; runtime/core/main.c builtin_env): no quotes or backslashes in it
     ENVDEF = [f'-DRECOMP_BUILTIN_ENV="{ENV["RECOMP_RUN_ENV"]}"'] if ENV.get("RECOMP_RUN_ENV") else []
     # the window's icon (window.c): the repository's assets/brand PNG, macOS's drawn on its own inset grid
     icon = os.path.join(ROOT, "assets", "brand", "png", "icon-" + ("macos-512" if DARWIN else "256") + ".png")
-    if not WIN and os.path.isfile(icon): ENVDEF.append(f'-DRECOMP_ICON="{icon}"')
+    if not WIN and not ANDROID and os.path.isfile(icon): ENVDEF.append(f'-DRECOMP_ICON="{icon}"')
     # the guest addresses the game's hooks use for this build of it (vitarecomp: the pack's GAME_ADDRS; hooks.c game_addr)
     if ENV.get("RECOMP_GAME_ADDRS"): ENVDEF.append(f'-DRECOMP_GAME_ADDRS="{ENV["RECOMP_GAME_ADDRS"]}"')
     host = [part(f) for f in (
@@ -334,14 +358,14 @@ def main(argv):
     objs = sorted(glob.glob(os.path.join(glob.escape(OBJ), "*.o"))) + sorted(glob.glob(os.path.join(glob.escape(IMGUIOBJ), "*.o")))
     # (Linux links libm/pthread explicitly; zlib: PSARC archives) -- objects only: the code generation flags a link
     # needs (RECOMP_CFLAGS' -flto) and the libraries' link words
-    link = [CC] + CPUFLAGS + extra + ["-w"] + hobjs + lwords + objs + sdl_libs + CXXLIB + LIBS + ["-o", OUT]
+    link = [CXX if ANDROID else CC] + CPUFLAGS + extra + ["-w"] + hobjs + lwords + objs + sdl_libs + CXXLIB + LIBS + ["-o", OUT]
     if sum(len(a) + 3 for a in link) > 30000:   # (Windows' command line holds 32 KiB: a game with its on-demand modules --
         # LOAD_MODULES, ~90 modules' objects -- failed with WinError 206; the objects go into response files, in order)
         def rsp(name, args):
             p = f"{OUT}.{name}.rsp"
             with open(p, "w", newline="\n") as f: f.write("".join('"' + a.replace("\\", "/").replace('"', '\\"') + '"\n' for a in args))
             return "@" + p
-        link = [CC] + CPUFLAGS + extra + ["-w", rsp("game", hobjs)] + lwords + [rsp("runtime", objs)] + sdl_libs + CXXLIB + LIBS + ["-o", OUT]
+        link = [CXX if ANDROID else CC] + CPUFLAGS + extra + ["-w", rsp("game", hobjs)] + lwords + [rsp("runtime", objs)] + sdl_libs + CXXLIB + LIBS + ["-o", OUT]
     sys.stdout.flush()
     r = subprocess.run(link)
     if r.returncode: return r.returncode
@@ -351,6 +375,7 @@ def main(argv):
     if WIN: beside(os.path.join(SDLW, "bin", "SDL3.dll"))
     if LT: beside(os.path.join(LT, "SDL3", "lib", "libSDL3.so.0"))   # (what -rpath $ORIGIN finds)
     if MT: beside(os.path.join(MT, "SDL3", "lib", "libSDL3.0.dylib"))   # (what -rpath @executable_path finds)
+    if ANDROID: beside(os.path.join(AA, "SDL3", "lib", "libSDL3.so"))   # (the APK's lib/<abi>/ holds both)
     say(f"built {OUT}")
     return 0
 

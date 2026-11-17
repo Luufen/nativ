@@ -847,6 +847,9 @@ static void builtin_env(void) {
 	if (n) fprintf(stderr, "    the game's built-in settings applied: %d (its pack's RUN_ENV; RECOMP_NO_RUN_ENV=1 skips them)\n", n);
 #endif
 }
+#ifdef __ANDROID__
+#include <SDL3/SDL_main.h>   /* (main becomes SDL_main, the function SDL's Java side starts in libmain.so) */
+#endif
 int main(int argc, char **argv) {
 	builtin_env();
 	atexit(gaps_report);   /* GAPS-01: the GAPS line + table and gaps.json at the end of every run */

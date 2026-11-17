@@ -756,7 +756,7 @@ def cmd_build(g, mode):
     if g.windows: extra["TARGET"] = "windows"
     mods = [os.path.join(g.OUT, "mod_" + m) for m in g.ALL]
     run([PY, os.path.join(RUNTIME, "build.py"), base, out] + mods, env=env_with(e, extra))
-    if mode not in ("verify", "profile") and not ENV.get("RECOMP_BIN"):   # (ready's: which tools built the play program)
+    if mode not in ("verify", "profile") and not ENV.get("RECOMP_BIN") and not (ENV.get("TARGET") or "").startswith("android"):   # (ready's: which tools built the play program; an Android build, android-<abi>/libmain.so, is not it)
         with open(os.path.join(g.OUT, ".built_version"), "w", newline="\n") as f: f.write(tools_version() + "\n")
 
 
