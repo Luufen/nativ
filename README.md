@@ -1,15 +1,15 @@
 # Project Nativ: unofficial fork
 
-[Luufen/nativ](https://github.com/Luufen/nativ) is a community fork of [Project Nativ](https://github.com/TheLostPantheon/nativ),
+[This repository](https://github.com/Luufen/nativ---Updated-30-games-120-widescreen) is a community fork of [Project Nativ](https://github.com/TheLostPantheon/nativ),
 not an official release; the original README follows [below](#project-nativ). It adds packs for more games, so
-Nativ can rebuild your own copy of them, and a launcher and in-game menu you can use with a controller or a touch
-screen alone. Its releases are tagged `vX.Y.Z-lfN` (based on upstream `vX.Y.Z`; `-fpN` before v0.1.5-lf3), are built from this repository's
-source by GitHub Actions (`.github/workflows/release.yml`) and are unsigned.
+Nativ can rebuild your own copy of them, a launcher and in-game menu you can use with a controller or a touch
+screen alone, and exports for a Steam Deck and for Android. Its releases are tagged `vX.Y.Z-lfN` (based on upstream
+`vX.Y.Z`; `-fpN` before v0.1.5-lf3), are built from the tagged source with `dev/release.sh` on Linux and are unsigned.
 
 **No game comes with this repository or its releases**, as with upstream: you need your own copy of each game, dumped
 from a Vita you own, and Sony's firmware update file.
 Generic fixes are also offered upstream as pull requests. Problems with these builds belong in
-[this fork's issues](https://github.com/Luufen/nativ/issues), not upstream's.
+[this fork's issues](https://github.com/Luufen/nativ---Updated-30-games-120-widescreen/issues), not upstream's.
 
 ## Games this fork has packs for
 
@@ -142,8 +142,49 @@ game from your copy, plus frame-rate and widescreen settings found automatically
 - Windows 11 (x64): Soul Sacrifice Delta, Persona 4: Dancing All Night and Tearaway played from a local build of the
   same source; every other game above reached its menu in automated test runs.
 - Steam Deck: Medieval Defenders and Soul Sacrifice Delta, each exported as an AppImage (`vitarecomp export-appimage`).
-- The release's Linux AppImage and macOS `.dmg`: built and packaged by CI only; no game has been run with them by this
-  fork.
+- Android (Samsung Galaxy Tab S7, Android 13): AQUA KITTY DX and Soul Sacrifice Delta, each exported as an `.apk`,
+  played by touch with picture, sound and movies.
+- Each release's Windows launcher passes the controller, touch, scroll, export and screen-fit tests. The Linux
+  AppImage is built and packaged only; no game has been run with it by this fork. The current releases are built on
+  Linux and have no macOS `.dmg`.
+
+## Contributing with an AI assistant
+
+Most of this fork was written with AI coding assistants (Claude Code, Codex and similar), and new game packs or a
+higher frame rate for a game you own are good first contributions made that way. Open the checkout in your assistant,
+add your own copy of the game in the launcher first (`+ Add game`, or `vitarecomp add`), and give it one of the prompts
+below with `<TITLE ID>` filled in.
+
+Rules for every contribution: a pull request holds only `packs/<title>/` files (`pack.toml`, `hooks.c`,
+`shaders.txt`) and tools or fixes, never anything from the game (no code, data, shaders, saves, screenshots, logs with
+its bytes) and no paths of your machine. Say what you checked and how: "reached the main menu in a test run" is fine,
+"playable" needs you to have played it. One game or one fix per pull request.
+
+**Add a pack for a new game**
+
+```text
+Read README.md, docs/developers.md ("Packs, versions and updates") and pipeline/packconf.py. I own <TITLE ID> and added it
+to my library. Make a pack for it: run `vitarecomp pack-init <TITLE ID>`, then `vitarecomp bootstrap <TITLE ID>`,
+and repeat analyze / recompile / build / test until the game reaches its first menu or stops for a reason you can
+name. When it stops, read the test run's GAPS line and the log, fix what the pack can fix (MODULES, seeds,
+TEST_FRAMES) and tell me what needs a runtime fix instead, with the evidence. Write down each attempt and its result
+before the next one. Don't guess menus or controls: ask me what is on screen and which button to press. At the end
+show me the pack's diff, the exact commands and their output, and what was and wasn't checked. Commit nothing from
+the game.
+```
+
+**Unlock 60 / 120 fps (or widescreen) for a game that has a pack**
+
+```text
+Read README.md, docs/runtime.md (Frame rate), pipeline/hookscan.py and runtime/core/hooks.c. For <TITLE ID>, run
+`vitarecomp hooks-scan <TITLE ID>` and list the frame-time candidates (1/30 s, frame_dt) and aspect candidates
+(960/544). For each candidate, find out from the recompiled code whether it runs once a frame and what it feeds;
+then try one at a time as IHOOKS in packs/<TITLE ID>/pack.toml with RECOMP_FRAME_RATES=30,60,120 in RUN_ENV, and
+test-run the game at 30, 60 and 120. A site is right only if game speed stays the same (animations, timers,
+movement) at every rate; check this with me in a real run before calling it done, because a scene can look fine
+while the game runs twice as fast. Write the README table's Frame rate / Widescreen cell from what was actually
+seen. Show me the diff, the commands and their output.
+```
 
 ## Credits
 
