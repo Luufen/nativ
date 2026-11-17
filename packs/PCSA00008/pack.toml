@@ -1,0 +1,21 @@
+# Resistance: Burning Skies (PCSA00008, US; the format: pipeline/packconf.py). Settings from Tzeentchnet's EU pack
+# (packs/PCSF00141, 1.02), whose FUNCTION_SEEDS are addresses of the EU build: this release's are its own (vitarecomp bootstrap).
+# RUN_ENV: their RECOMP_PRESENT_BACKEND=renderer and FSR1 are not in this tree (the GPU frame is presented directly);
+# RECOMP_NGS_REVERB=0 and the skip_mission_intros option as theirs.
+NAME = "Resistance: Burning Skies"
+REGION = "US"
+SPLIT = 24
+MODULES = "libc libgxm_es4 libgpu_es4 libfios2 np_matching2 libssl np_common librudp"
+RUN_ENV = "RECOMP_RENDER_SCALE=1 RECOMP_FRAME_RATE=30 RECOMP_NGS_REVERB=0 RECOMP_GAME_OPTIONS=skip_mission_intros"
+TEST_ENV = "RECOMP_GFX=soft RECOMP_SHADERS=interp RECOMP_CLOCK=fixed"
+TEST_FRAMES = 600 # title screen (theirs); FMOD's ATRAC9 streams are active before this frame
+TEST_TIMEOUT = 360
+
+# The builds this pack plays: SHA-256 of the eboot.bin.elf (measured 2026-11-17 on the owner's copy and its update)
+[versions."1.00"]
+sha256 = "a83fe0279e9af2ae267d736fb881eac093f4d93dc8dc666a006873745f66e703"
+status = "supported"
+
+[versions."1.02"]
+sha256 = "db59fe44159accd4821e27ac30de2669da297bb9e010c57ef6b55747c2f82d8e"
+status = "recommended"
