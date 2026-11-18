@@ -10,6 +10,10 @@
 #include <signal.h>
 #include <stdarg.h>
 #include "../core/kernel.c"
+#ifdef CANCEL_EVF_BEFORE   /* fail-before for the CancelEventFlag checks: the old unimplemented import (returns 0) */
+static void h_cancel_evf_stub(Cpu *c) { RET(0); }
+#define h_cancel_evf h_cancel_evf_stub
+#endif
 __thread uint32_t recomp_last_pc;   /* (main.c defines it in the runtime: the write watch names the last guest pc) */
 void plat_thread_guard(void) {}   /* (platform_*.c defines it in the runtime: AUTO-01 LBP-9 stack guarantee; nothing here) */
 
@@ -134,6 +138,24 @@ static void test_evf(void) {
 	/* delete wakes the waiter with WAIT_DELETE; the uid is gone */
 	CHECKEQ(call(h_delete_evf, 1, s), 0); pthread_join(td, 0);
 	CHECKEQ(d.result, E_WAIT_DELETE); CHECKEQ(call(h_set_evf, 2, s, 1), E_UNKNOWN_EVF_ID);
+	/* PSN-NOVA: CancelEventFlag(uid, pattern, *num) releases every waiter with WAIT_CANCEL, sets the pattern, counts them
+	 * (-DCANCEL_EVF_BEFORE: the old stub, 0 and nothing else -- the waiters stay asleep) */
+	{
+		uint32_t k = call(h_create_evf, 4, name, 0x1000, 0, 0), num = word();
+		EvfWait w1 = { k, 2, 1, word(), 0 }, w2 = { k, 4, 1, word(), 0 };
+		pthread_t t1 = go(evf_waiter, &w1); nap(20); pthread_t t2 = go(evf_waiter, &w2); nap(20);
+		CHECK(!w1.done && !w2.done);
+		WR32(num, 0xdead);
+		CHECKEQ(call(h_cancel_evf, 3, k, 2, num), 0); nap(50);
+		CHECK(w1.done && w2.done);
+		CHECKEQ(w1.result, E_WAIT_CANCEL); CHECKEQ(w2.result, E_WAIT_CANCEL);
+		CHECKEQ(RD32(num), 2);
+		CHECKEQ(call(h_poll_evf, 4, k, 2, 1, out), 0); CHECKEQ(RD32(out), 2);   /* the pattern is the one given */
+		CHECKEQ(call(h_cancel_evf, 3, k, 0, 0), 0);                                  /* no waiters, no *num: fine */
+		CHECKEQ(call(h_cancel_evf, 3, 0x40020fff, 0, num), E_UNKNOWN_EVF_ID);
+		if (!w1.done || !w2.done) { call(h_set_evf, 2, k, 6); nap(20); }            /* (the old stub: let them go) */
+		pthread_join(t1, 0); pthread_join(t2, 0);
+	}
 	/* the info structure */
 	uint32_t info = guest_alloc(0x38, 4); WR32(info, 0x38);
 	CHECKEQ(call(h_evf_info, 2, e, info), 0); CHECKEQ(RD32(info + 0x30), 0); CHECKEQ(RD32(info + 0x34), 0);

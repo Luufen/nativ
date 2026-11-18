@@ -1,0 +1,24 @@
+# Phantasy Star Nova (PCSH00143, Asia, Chinese; from `vitarecomp pack-init`, then PSN-NOVA 2026-11-18).
+# Checked headless only (no owner run yet): no input, the SEGA logo ~f300, the intro movie ~f600-4500, the title with
+# "PRESS START BUTTON" from ~f5100 (VISUAL_ONLY). Not checked: the menus, a save, gameplay, frame rates above 30.
+NAME = "夢幻之星 NOVA"
+REGION = "Asia"
+ELF = "eboot.bin.elf"
+MODULES = "libc libgxm_es4 libgpu_es4 libfios2 libsceavplayer libpvf libscemp4 libSceFt2"
+TEST_FRAMES = 5400        # the title screen ("PRESS START BUTTON" from ~f5100, no input)
+TEST_TIMEOUT = 900
+# note: shipped in sce_module/ but not loaded: libface libsmart libult (add to MODULES if the run stubs their imports)
+
+[versions."1.00"]
+sha256 = "ffe9d9e79cd1c50cea3df9d5c984f1f62b7e22bfa3cf179bc6e00fe586f0d51d"
+status = "supported"
+# found on runs (a new copy needs it from its first build): 0x8204c890 is an ARM vtable function (type id) reached
+# only through an even pointer from Thumb code (blx r2, frame 0)
+FUNCTION_SEEDS = "0x8204c890:arm"
+
+# hook candidates (vitarecomp hooks-scan, AUTO-GENERATED, UNVERIFIED): constants this game builds that the
+# runtime's generic IHOOKS replace. Each is a guess until a run shows its effect -- uncomment what holds.
+# frame_dt: 8 site(s), 1/30 (s per frame at 30 fps), in 5 function(s)
+# IHOOKS = "0x81286bb4:frame_dt 0x8134d642:frame_dt 0x818367de:frame_dt 0x81836af8:frame_dt 0x81a85adc:frame_dt 0x81a85afc:frame_dt 0x81a85b34:frame_dt 0x81f7c314:frame_dt"
+# aspect: no site found
+# hints (96): 1/60 (the game may have a 60 fps path)

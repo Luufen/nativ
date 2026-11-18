@@ -43,6 +43,7 @@
 #define E_ALREADY_SENT          0x80028121u
 #define E_WAIT_TIMEOUT          0x80028005u
 #define E_WAIT_DELETE           0x80028006u
+#define E_WAIT_CANCEL           0x80028007u   /* a wait ended by sceKernelCancelEventFlag */
 #define E_UNKNOWN_THREAD_ID     0x80028021u
 #define E_ILLEGAL_THREAD_ID     0x80028022u
 #define E_NOT_DORMANT           0x80028028u
@@ -1310,6 +1311,20 @@ static void h_set_evf(Cpu *c) {
 	RET(0);
 }
 static void h_clear_evf(Cpu *c) { Obj *o = by_uid(A0, EVF); if (!o) { RET(E_UNKNOWN_EVF_ID); return; } pthread_mutex_lock(&o->m); o->bits &= A1; pthread_mutex_unlock(&o->m); RET(0); }   /* (uid, bits to keep) */
+/* sceKernelCancelEventFlag(uid, set pattern, *num waiting threads): every waiter is released with
+ * SCE_KERNEL_ERROR_WAIT_CANCEL, then the pattern becomes the given one (no waiter is left to take it), the count goes
+ * to *num (Vita3K 3ab53c9d sync_primitives.cpp Event::cancel). Unimplemented, it returned 0 and woke nobody: a title
+ * that kicks its worker threads with it (PCSH00143, "Aska" workers waiting for bit 2) hung after its first frame */
+static void h_cancel_evf(Cpu *c) {
+	Obj *o = by_uid(A0, EVF); if (!o) { RET(E_UNKNOWN_EVF_ID); return; }
+	pthread_mutex_lock(&o->m);
+	uint32_t n = 0;
+	for (Waiter *w = o->head, *nx; w; w = nx) { nx = w->next; wake(o, w, E_WAIT_CANCEL); n++; }
+	o->bits = A1;
+	if (A2) WR32(A2, n);
+	pthread_mutex_unlock(&o->m);
+	RET(0);
+}
 static void h_delete_evf(Cpu *c) { h_delete_uid(c, EVF, E_UNKNOWN_EVF_ID); }
 static void h_evf_info(Cpu *c) {   /* (uid, *SceKernelEventFlagInfo 0x38) */
 	Obj *o = by_uid(A0, EVF);
@@ -2229,6 +2244,7 @@ const HleEntry hle_kernel[] = {
 	{"sceKernelOpenSema", h_open_sema}, {"sceKernelCloseSema", h_zero_ok}, {"sceKernelOpenMutex", h_open_mutex}, {"sceKernelCloseMutex", h_zero_ok},
 	{"sceKernelCreateEventFlag", h_create_evf}, {"sceKernelWaitEventFlag", h_wait_evf}, {"sceKernelWaitEventFlagCB", h_wait_evf_cb},
 	{"sceKernelPollEventFlag", h_poll_evf}, {"sceKernelSetEventFlag", h_set_evf}, {"sceKernelClearEventFlag", h_clear_evf},
+	{"sceKernelCancelEventFlag", h_cancel_evf},
 	{"sceKernelDeleteEventFlag", h_delete_evf}, {"sceKernelGetEventFlagInfo", h_evf_info},
 	{"sceKernelGetThreadmgrUIDClass", h_uid_class},
 	{"sceKernelCreateSimpleEvent", h_create_sevent}, {"sceKernelDeleteSimpleEvent", h_delete_sevent}, {"sceKernelWaitEvent", h_wait_sevent}, {"sceKernelWaitEventCB", h_wait_sevent_cb},
