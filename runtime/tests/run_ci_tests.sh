@@ -33,6 +33,9 @@ run metrics_test      -O1 -g -Wall -Wno-unused-function -I ../core -I ../platfor
 run stubret_test      -O1 -g -Wall $INC stubret_test.c
 run memblock_budget_test -O1 -g -Wall -I ../core memblock_budget_test.c
 run view_swz_test     -O1 -g -Wall -I ../gfx view_swz_test.c
+run view_u16_test     -O1 -g -Wall -I ../gfx view_u16_test.c -lm
+run target_rows_test  -O1 -g -Wall -I ../gfx target_rows_test.c
+run frame_rates_fast_test -O1 -Wall -I ../ui frame_rates_fast_test.c
 run audiodec_test     -O1 -g -Wall -D_GNU_SOURCE $INC audiodec_test.c ../../third_party/libatrac9/*.c -lpthread -lm
 run codec_engine_test $CF $INC codec_engine_test.c -lpthread
 run audio_pace_test   -O1 -g -Wall audio_pace_test.c

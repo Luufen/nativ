@@ -23,6 +23,8 @@
 #include "target_scale.h"   /* RECOMP_TARGET_SCALE's rules (UC-LAMP: factor 0) */
 #include "fsr/fsr.h"
 #include "view_swz.h"
+#include "view_u16.h"
+#include "target_rows.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1729,6 +1731,7 @@ typedef struct {
 	int kind;        /* target_kind: the GPU texture's format family */
 	uint64_t gen;    /* write_clock when the GPU texture last got new content (a draw, an upload from guest) */
 	uint8_t sx, sy;  /* its texels a guest pixel, across and down: the render scale, or a boosted target's (target_scale) */
+	uint64_t rows_gen; uint32_t rows_y0, rows_y1;   /* target_download_rows: the rows last brought down alone and the gen they were of (still gpu_dirty) */
 	SDL_GPUTexture *mv; uint64_t mv_frame; uint32_t mv_n;   /* the motion target beside it (RECOMP_MV: mv_target), the frame it was
 	                                                          * last cleared in (mv_qframe + 1) and its motion draws that frame */
 } TargetEntry;
@@ -2114,10 +2117,46 @@ static void target_download_to_buffer(TargetEntry *e, uint8_t *out) {   /* as RG
 	floats_to_texels(TK_U8, f, out, npx); free(f);
 }
 static void textures_invalidate(uint32_t lo, uint32_t hi);
+static const char *sync_why = "";   /* for the trace: what asked for this download */
+/* RECOMP_GPU_ROWS_OFF=1: every texture-view read downloads its whole target, as before target_download_rows (an A/B switch) */
+static int rows_off(void) { static int v = -1; if (v < 0) { const char *e = getenv("RECOMP_GPU_ROWS_OFF"); v = e && *e == '1'; } return v; }
+/* rows [y0, y1) of a plain RGBA8 target (target_raw_ok) -> guest memory, the rest left GPU-newer (gpu_dirty stays): a small
+ * texture inside a big target in a layout no view serves (LittleBigPlanet: a 32x32 U8 texture inside a 768x1024 target,
+ * read every frame -- the whole 3 MB came down for 1 KB, 2-4 ms of a 8.3 ms frame at 120 fps). target_rows.h */
+static void target_download_rows(TargetEntry *e, uint32_t y0, uint32_t y1) {
+	if (e->rows_gen == e->gen && e->rows_y0 <= y0 && e->rows_y1 >= y1) return;   /* those rows of this content are down already */
+	if (e == scene_entry) batch_flush("target download");
+	uint64_t tdl0 = us_now(); n_tgt_downloads++;
+	const uint32_t rows = y1 - y0, rb = 4u * e->width, n = rb * rows;
+	SDL_GPUTransferBufferCreateInfo xci = { .usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = n };
+	SDL_GPUTransferBuffer *xb = SDL_CreateGPUTransferBuffer(gpu(), &xci);
+	SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(gpu());
+	SDL_GPUTexture *down = e->color;
+	if (TSCALED(e) && target_lo(e)) {   /* as target_download_texels: one sample of each pixel's block, only these rows */
+		SDL_GPUBlitInfo bl = { .source = { .texture = e->color, .y = TSY(e, y0), .w = TSX(e, e->width), .h = TSY(e, rows) }, .destination = { .texture = e->lo, .y = y0, .w = e->width, .h = rows }, .load_op = SDL_GPU_LOADOP_LOAD, .filter = SDL_GPU_FILTER_NEAREST };
+		SDL_BlitGPUTexture(cmd, &bl); down = e->lo;
+	}
+	SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
+	SDL_GPUTextureRegion src = { .texture = down, .y = y0, .w = e->width, .h = rows, .d = 1 };
+	SDL_GPUTextureTransferInfo dst = { .transfer_buffer = xb, .pixels_per_row = e->width, .rows_per_layer = rows };
+	SDL_DownloadFromGPUTexture(cp, &src, &dst);
+	SDL_EndGPUCopyPass(cp);
+	SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+	SDL_WaitForGPUFences(gpu(), true, &fence, 1); SDL_ReleaseGPUFence(gpu(), fence);
+	const uint8_t *map = SDL_MapGPUTransferBuffer(gpu(), xb, false);
+	const uint32_t at = e->addr + y0 * rb;
+	gwatch_write_begin(at, n); memcpy(G(at), map, n); gwatch_write_end(at, n);
+	SDL_UnmapGPUTransferBuffer(gpu(), xb);
+	SDL_ReleaseGPUTransferBuffer(gpu(), xb);
+	e->rows_gen = e->gen; e->rows_y0 = y0; e->rows_y1 = y1;
+	textures_invalidate(at, at + n);
+	t_tgt_download += us_now() - tdl0;
+	if (trace_sync()) fprintf(stderr, "gpu trace: download rows %u-%u of target %#x %ux%u to guest %s\n", y0, y1, e->addr, e->width, e->height, sync_why);
+	if (hitch_log() && us_now() - tdl0 > 1000) fprintf(stderr, "    gpu hitch: rows %u-%u of target %#x %ux%u downloaded to guest memory %s in %.2f ms\n", y0, y1, e->addr, e->width, e->height, sync_why, (us_now() - tdl0) / 1e3);
+}
 /* the GPU colour texture -> guest memory, in the game's declared format, exactly as gfx_soft.c's
  * target_write would have stored the same colours (so a CPU-fallback draw, a texture that reads
  * this memory in another format or layout, present and RECOMP_SHOT all see the real bytes) */
-static const char *sync_why = "";   /* for the trace: what asked for this download */
 static void target_download_to_guest(TargetEntry *e) {
 	if (trace_sync()) fprintf(stderr, "gpu trace: download target %#x to guest %s (after %u gpu + %u software draws)\n", e->addr, sync_why, n_gpu_draws, n_fallback);
 	uint64_t tdl0 = us_now(); n_tgt_downloads++;
@@ -3864,7 +3903,7 @@ static int view_mode(uint32_t tgt_fmt, const GfxTexture *tex, uint32_t *tex_bpp,
 	 * formats (U8) place the one value; the HDR packed formats take none */
 	static const uint8_t sw4[8][4] = { {0,1,2,3}, {2,1,0,3}, {3,2,1,0}, {1,2,3,0}, {0,1,2,5}, {2,1,0,5}, {3,2,1,5}, {1,2,3,5} };
 	static const uint8_t sw1[8][4] = { {0,4,4,5}, {0,4,4,4}, {0,5,5,5}, {0,0,0,0}, {0,0,0,4}, {0,0,0,5}, {4,4,4,0}, {5,5,5,0} };
-	int ncomp = xb == 0x0c000000u || xb == 0x0d000000u || xb == 0x1b000000u || xb == 0x0e000000u ? 4 : xb == 0x00000000u || xb == 0x12000000u || xb == 0x13000000u ? 1 : 0;
+	int ncomp = xb == 0x0c000000u || xb == 0x0d000000u || xb == 0x1b000000u || xb == 0x0e000000u ? 4 : xb == 0x00000000u || xb == 0x09000000u || xb == 0x12000000u || xb == 0x13000000u ? 1 : 0;   /* (U16: one component, as gfx_soft.c swizzle_ncomp) */
 	for (int k = 0; k < 4; k++) swz[k] = ncomp == 4 ? sw4[sw][k] : ncomp == 1 ? sw1[sw][k] : (uint32_t)k;
 	switch (tb) {
 	case 0x80800000u: *tex_bpp = 1; return xb == 0x00000000u ? 5 : -1;                          /* U8 as U8 */
@@ -3874,6 +3913,9 @@ static int view_mode(uint32_t tgt_fmt, const GfxTexture *tex, uint32_t *tex_bpp,
 		swz[0] = 0; swz[1] = 1; swz[2] = 4; swz[3] = 5; return 0;
 	case 0x60800000u: return xb == 0x0e000000u && !((tgt_fmt >> 20) & 3) ? 0 : -1;             /* U2U10U10U10 as U2U10U10U10, ABGR (kept as RGBA8 here:
 	                                                                                               * Gravity Rush's scene target, composited every frame) */
+	case 0x40800000u: return view_u16_mode(tgt_fmt, tex->format, tex_bpp);                    /* U16 as U16 (view_u16.h): a U16 surface read as sub-rectangles
+	                                                                                               * (a 768x768 atlas read as three 384x384 quadrants) came down whole
+	                                                                                               * on every read, ~35 ms a frame */
 	case 0x10800000u: return xb == 0x12000000u || xb == 0x13000000u ? 6 : -1;                                        /* F32 as F32 (mode 5's decode at full precision: Uncharted's
 	                                                                                               * shadow mask went through guest memory, its lighting read
 	                                                                                               * it at 1x and every lit silhouette got a 1x-pixel halo) */
@@ -4113,7 +4155,12 @@ guest:;
 	for (int k = 0; k < n; k++) {
 		TargetEntry *te2 = list[k];
 		if (trace_sync()) fprintf(stderr, "gpu trace: texture %#x fmt %#x %ux%u u%#x is a view of target %#x fmt %#x %ux%u kind %d\n", tex->data, tex->format, tex->width, tex->height, tex->u_mode, te2->addr, te2->format, te2->width, te2->height, te2->kind);
-		sync_why = "(texture view)"; target_sync_for_cpu(te2);
+		sync_why = "(texture view)";
+		{	/* a small texture in a big plain target: only its rows (target_rows.h) */
+			GfxTarget tg = target_entry_as_gfx(te2); uint32_t y0, y1;
+			if (!rows_off() && target_raw_ok(te2, &tg) && target_rows_for(te2->addr, 4u * te2->width, te2->height, tex->data, xhi, &y0, &y1)) { uint64_t t0 = us_now(); target_download_rows(te2, y0, y1); t_tsync += us_now() - t0; continue; }
+		}
+		target_sync_for_cpu(te2);
 	}
 	return 0;
 }

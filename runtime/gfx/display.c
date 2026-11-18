@@ -359,6 +359,8 @@ static int forced_rate = -1;   /* display_force_frame_rate: a capture's switch (
 void display_force_frame_rate(int fr) { forced_rate = fr; }
 static int fr_allowed_now(void) { static int m = -1; if (m < 0) m = fr_allowed(getenv("RECOMP_FRAME_RATES")); return m; }
 int display_frame_rates_allowed(void) { return fr_allowed_now(); }   /* (overlay.cpp: the rows it offers) */
+int display_frame_rates_fast(void);
+int display_frame_rates_fast(void) { static int m = -1; if (m < 0) m = fr_fast(getenv("RECOMP_FRAME_RATES_FAST"), fr_allowed_now()); return m; }   /* (overlay.cpp: the rates its hint names) */
 static int frame_rate(void) {
 	if (forced_rate >= 0) return fr_effective(forced_rate, FR_30 | FR_60 | FR_120);
 	const int allowed = fr_allowed_now();
@@ -381,7 +383,7 @@ static int frame_rate(void) {
 	static long until = -2;
 	if (until == -2) { const char *e = getenv("RECOMP_FRAME_RATE_UNTIL"); until = e && *e ? atol(e) : -1; }
 	if (until >= 0) return frames < (uint64_t)until ? fr_effective(60, allowed) : 30;
-	int r = fr_effective(env >= 0 ? env : settings_int("frame_rate", 30), allowed);
+	int r = fr_effective(env >= 0 ? env : fr_setting_for(settings_int("frame_rate", 30), settings_own_has("frame_rate"), display_frame_rates_fast()), allowed);   /* (a game with fast rates: only its own choice) */
 	/* RECOMP_MOVIE_30=1 (a pack's): 30 fps while a movie plays (a picture decoded within the last 15 presented frames).
 	 * The movies are 30 fps themselves; what a game times to them in its own updates (Persona 4 Dancing's anime
 	 * cutscenes: their event-script subtitles, one script frame an update) keeps its time */

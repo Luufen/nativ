@@ -418,6 +418,42 @@ decodes from the bytes the target stores (gfx_soft.c's target_write_of and apply
 
 It prints `420 checks, 0 failed` and exits 0.
 
+## Render-target views of U16 targets: `view_u16_test.c`
+
+Checks `runtime/gfx/view_u16.h`, the view mode gfx_gpu.c's view pass uses when a U16 texture reads memory a U16
+render target drew (sub-rectangles of one surface, such as an atlas read as quadrants): for every value the GPU
+target holds and every SWIZZLE1 texture swizzle, the view's value must equal what the texture decodes from the word
+the target stores (gfx_soft.c's to16, the U16 texel decode and apply_swizzle, restated as the oracle); other pairs stay
+refused. `-DVIEW_U16_UPSTREAM_RULE` builds the rule before it (no U16 view: every read downloaded the target) and fails.
+
+    cc -O1 -g -Wall -I../gfx view_u16_test.c -o /tmp/view_u16_test -lm && /tmp/view_u16_test
+
+It prints `29 checks, 0 failed` and exits 0.
+
+## Partial downloads of a render target: `target_rows_test.c`
+
+Checks `runtime/gfx/target_rows.h`, the rows of a render target gfx_gpu.c brings down to guest memory when a texture
+reads a small part of a big GPU-drawn target in a layout no view serves (a 32x32 U8 texture inside a 768x1024
+U8U8U8U8 target): over a model target read at many places and sizes, the texture must get every byte as the GPU has
+it, a texture of at most a quarter of the target must bring down only the rows it touches, and the other rows keep
+guest memory's bytes. `-DTARGET_ROWS_UPSTREAM_RULE` builds the rule before it (always the whole target) and fails.
+
+    cc -O1 -g -Wall -I../gfx target_rows_test.c -o /tmp/target_rows_test && /tmp/target_rows_test
+
+It prints `1628 checks, 0 failed` and exits 0.
+
+## Frame rates at which a game runs faster: `frame_rates_fast_test.c`
+
+Checks `runtime/ui/frame_rates.h`'s marker for rates at which a game runs faster than normal (a pack's RUN_ENV
+`RECOMP_FRAME_RATES_FAST=60,120`: its simulation steps once a presented frame): the parsing (only 60 and 120, only rates
+the game allows, none without the marker), the per-rate test, the words of the menu's and the launcher's hint, and
+the setting such a game uses (only its own choice: a shared 60 or 120 gives 30). `-DFRAME_RATES_FAST_BEFORE` builds
+the checks against the header before the marker (no fast rates, the shared value taken) and fails.
+
+    cc -O1 -Wall -I ../ui frame_rates_fast_test.c -o /tmp/frame_rates_fast_test && /tmp/frame_rates_fast_test
+
+It prints `26 checks, 0 failed` and exits 0.
+
 ## SceAudiodec's ATRAC9 decoder: `audiodec_test.c`
 
 Checks `runtime/audio/audiodec.c` (ATRAC9 through the vendored LibAtrac9): InitLibrary/CreateDecoder fill the info
