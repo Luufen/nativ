@@ -3,8 +3,8 @@ NAME = "Gundam Breaker 3"
 REGION = "Asia"
 ELF = "eboot.bin.elf"
 MODULES = "libc libgxm_es4 libgpu_es4 libfios2 libSceJson"
-RUN_ENV = "RECOMP_GAME_LANG=en_us"   # this release contains official English resources; use them on every host locale
-TEST_ENV = "RECOMP_GAME_LANG=en_us RECOMP_INPUT_STICKS=11100-12000:128,0,128,128"
+RUN_ENV = "RECOMP_GAME_LANG=en_us RECOMP_GPU_DYNAMIC_SMP=1 RECOMP_GPU_FRAG_LDST_MEM=1"   # official English resources on every host locale; the texture-buffer SMP and the fragment LDST guest-memory windows on the GPU
+TEST_ENV = "RECOMP_GAME_LANG=en_us RECOMP_GPU_DYNAMIC_SMP=1 RECOMP_GPU_FRAG_LDST_MEM=1 RECOMP_INPUT_STICKS=11100-12000:128,0,128,128"
 
 # A fresh-profile route through NEW START, the network notice, the agreement, the Gundam Breaker 2
 # import choice and the opening story. Circle advances the story dialogue and reaches the first

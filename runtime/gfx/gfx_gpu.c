@@ -111,6 +111,7 @@ static SDL_GPUBuffer *iring; static SDL_GPUTransferBuffer *iring_xfer; static ui
 static SDL_GPUBuffer *wring; static SDL_GPUTransferBuffer *wring_xfer; static uint32_t wring_pos;   /* in words */
 static uint32_t bw_lo = ~0u, bw_hi, bwr_lo = ~0u, bwr_hi;   /* the pending batch's window words: written this batch (its one upload), and referenced (its fence) */
 static uint32_t n_ldst_new, n_ldst_reused;   /* this frame's windows placed / reused */
+static int frag_ldst_mem_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("RECOMP_GPU_FRAG_LDST_MEM"); v = e && *e && *e != '0'; } return v; }   /* RECOMP_GPU_FRAG_LDST_MEM=1 (a pack opt-in): fragment LDST pointers outside a usable colour target read guest-memory windows on the GPU */
 static int no_indexed(void) { static int v = -1; if (v < 0) v = getenv("RECOMP_GPU_NO_INDEXED") != 0; return v; }   /* RECOMP_GPU_NO_INDEXED=1: one record per index, as before */
 static uint64_t t_up_decode, t_up_xfer, t_up_submit;   /* (RECOMP_GPU_STATS) the texture uploads' decode, transfer buffers (create, map, copy), command buffer (acquire, submit, release) */
 static uint64_t t_vfetch, t_texhash, t_texup, t_tsync, t_view, t_submit, t_shader, t_pipe, t_bind, t_setup, t_vbuf, t_pass, t_total, t_map, t_acq, t_scene_sync;
@@ -6022,7 +6023,8 @@ void gfx_gpu_draw(const GfxDraw *d) {
 	}
 	if (!pipe || (!pipeline_pending(pipe) && !pipe->pipe)) { soft_fallback(d, "no pipeline"); return; }
 	/* A fragment LDST pointer inside a GPU colour target uses that target's sampled-image fast path.
-	 * Any other valid pointer is copied to the common guest-memory window ring below. */
+	 * With RECOMP_GPU_FRAG_LDST_MEM=1 (a pack opt-in: Gundam Breaker 3) any other valid pointer is copied to the common
+	 * guest-memory window ring below; without it such a draw is drawn in software, as before. */
 	TargetEntry *ldst_te[8] = {0}; uint32_t ldst_win[8][4]; memset(ldst_win, 0, sizeof ldst_win);
 	uint32_t ldst_mem[8] = {0}; int nldst_mem = 0;
 	for (int k = 0; k < fs->nldst && k < 8; k++) {
@@ -6032,7 +6034,11 @@ void gfx_gpu_draw(const GfxDraw *d) {
 			GfxTarget tg = target_entry_as_gfx(x); uint32_t b = (uint32_t)gfx_target_bpp(&tg);
 			if (ptr >= x->addr && ptr < x->addr + b * x->width * x->height && (!te || x->gen > te->gen)) { te = x; bpp = b; }
 		}
-		if (!fs->frag_ldst_storage && te && te != scene_entry && ((te->kind == TK_F16 && bpp == 8) || (te->kind == TK_U8 && bpp == 4))) {
+		const int usable = te && te != scene_entry && ((te->kind == TK_F16 && bpp == 8) || (te->kind == TK_U8 && bpp == 4));
+		if (!frag_ldst_mem_on() && (fs->frag_ldst_storage || !usable)) {   /* (the guest-memory windows are a pack opt-in: the scene's own target or one of another format has newer bytes on the GPU than in guest memory) */
+			soft_fallback(d, fs->frag_ldst_storage ? "fragment LDST storage-only variant (RECOMP_GPU_FRAG_LDST_MEM=1 opts in)" : "fragment LDST outside a GPU colour target"); return;
+		}
+		if (!fs->frag_ldst_storage && usable) {
 			ldst_te[k] = te;
 			ldst_win[k][0] = te->addr; ldst_win[k][1] = bpp * te->width * te->height; ldst_win[k][2] = bpp * te->width; ldst_win[k][3] = (te->kind == TK_F16 ? 1u : 0u) | bpp << 8;
 		} else {

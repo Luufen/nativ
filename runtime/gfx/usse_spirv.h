@@ -125,6 +125,8 @@ void usse_spirv_set_f16_lean(int on);
  * Decided once by gfx_gpu.c before its first shader; part of the module, like the fetch mode */
 #define USSE_CANON_VARY 13
 void usse_spirv_set_canonical_varyings(int on);
+/* register-indexed SMP units translated (an OpSwitch over all 16 units): default RECOMP_GPU_DYNAMIC_SMP, off */
+void usse_spirv_set_dynamic_smp(int on);
 uint32_t usse_spirv_vary_ncomp(const UsseVertexLayout *vl, int word);
 /* the variant fields of a shader key that make a difference to the module, normalised: the colour kind only for a raw-word
  * colour output (0, 1 RGBA16F or 2 RGBA32F; 0 for value colours), the cube and snap units only where the program samples

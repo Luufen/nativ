@@ -180,6 +180,11 @@ int main(void) {
 	usse_spirv_set_canonical_varyings(1);
 
 	uint32_t sa[256] = {0}; int units[16] = {0}, nsmp = 0;
+	usse_spirv_set_dynamic_smp(0);   /* the default: a register-indexed SMP refuses the module (software path) */
+	SpirvModule dyn_off = translate(smp(0, 2, 1), sa, units, &nsmp, 0);
+	ck(!dyn_off.ok, "without the opt-in a register-indexed SMP is refused, as before");
+	usse_spirv_free(&dyn_off);
+	usse_spirv_set_dynamic_smp(1);   /* RECOMP_GPU_DYNAMIC_SMP=1: the rest of this test */
 	SpirvModule dyn = translate(smp(0, 2, 1), sa, units, &nsmp, 0);
 	ck(dyn.ok, "TEMP0 texture-buffer index translates");
 	if (!dyn.ok) printf("     err: %s\n", dyn.err);

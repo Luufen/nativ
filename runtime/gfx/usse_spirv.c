@@ -1194,7 +1194,16 @@ static int resolve_smp_unit(const UOp *op, const uint32_t sa_tex_unit[256]) {
 	else return -1;
 	return (unit >= 0 && unit < 16) ? unit : -1;
 }
-static int dynamic_smp_unit(const UOp *op) { return op->s1.bank != BK_IMM && op->s1.bank != BK_SA; }
+/* register-indexed SMP units on the GPU (sample_smp_dynamic: an OpSwitch over the 16 units) are a pack opt-in,
+ * RECOMP_GPU_DYNAMIC_SMP=1 (Gundam Breaker 3's texture buffer); off, such an SMP refuses the module as before, and
+ * the draw stays in the software path, whose interpreter reads the unit from the register */
+static int dyn_smp = -1;
+void usse_spirv_set_dynamic_smp(int on) { dyn_smp = on != 0; }
+static int dynamic_smp_on(void) {
+	if (dyn_smp < 0) { const char *e = getenv("RECOMP_GPU_DYNAMIC_SMP"); dyn_smp = e && *e && *e != '0'; }
+	return dyn_smp;
+}
+static int dynamic_smp_unit(const UOp *op) { return op->s1.bank != BK_IMM && op->s1.bank != BK_SA && dynamic_smp_on(); }
 void usse_spirv_key(const UsseProgram *prog, const UsseFragLayout *fl, const uint32_t sa_tex_unit[256], int *color_kind, uint32_t *cube_mask, uint32_t *snap_mask) {
 	uint32_t used = 0; int n = 0; const UOp *code = usse_program_code(prog, 0, &n);
 	for (int i = 0; i < n; i++) if (code[i].op == OP_SMP) {   /* (resolve_smp_unit's, without noting the read) */
