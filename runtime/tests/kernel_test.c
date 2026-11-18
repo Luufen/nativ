@@ -950,6 +950,21 @@ static void test_uid_class(void) {
 	CHECKEQ(call(h_uid_class, 1, e), 0);                                              /* a deleted object: no class */
 	CHECKEQ(call(h_uid_class, 1, 0x12345679), 0);                                     /* no object */
 }
+/* the object table past 1,048,576 objects (uids are never reused: a game that creates and deletes lightweight mutexes
+ * all the time gets there in about an hour of play) -- every object made past it is still found */
+static void test_obj_table(void) {
+	nobjs = 1024 * 1024 - 4;
+	uint32_t w = guest_alloc(32 * 8, 8); memset(G(w), 0, 32 * 8);
+	for (int i = 0; i < 8; i++) {
+		CHECKEQ(call(h_create_lwmutex, 5, w + 32 * i, 0, 0, 0, 0), 0);
+		Obj *o = obj_at((uint32_t)nobjs - 1);
+		CHECK(o != 0 && o->work == w + 32 * i);
+		CHECK(by_work(w + 32 * i, LWMUTEX) == o);
+		CHECKEQ(call(h_lock_lwmutex, 3, w + 32 * i, 1, 0), 0); CHECKEQ(call(h_unlock_lwmutex, 2, w + 32 * i, 1), 0);
+		CHECKEQ(call(h_delete_lwmutex, 1, w + 32 * i), 0);
+	}
+}
+
 int main(void) {
 	recomp_mem = mmap(0, 1ull << 32, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
 	if (recomp_mem == MAP_FAILED) { perror("mmap"); return 2; }
@@ -969,6 +984,9 @@ int main(void) {
 	int before = checks, failed_before = fails;
 	test_sched();
 	fprintf(stderr, "scheduler (RECOMP_SCHED=vita): %d checks, %d failed\n", checks - before, fails - failed_before);
+	before = checks; failed_before = fails;
+	test_obj_table();
+	fprintf(stderr, "object table past 1,048,576: %d checks, %d failed\n", checks - before, fails - failed_before);
 	fprintf(stderr, "%d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;
 }

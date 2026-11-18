@@ -854,9 +854,14 @@ static pthread_cond_t *wait_cv(void) { if (!my_cv) { my_cv = malloc(sizeof *my_c
  * object stays allocated, so a stale uid or pointer is an error rather than a crash), and the
  * lightweight ones also indexed by their guest work area */
 #define OBJ_PAGE 1024
-static Obj **obj_pages[1024];
+/* the page directory spans the whole uid space (0x40020001 + 2 * index stays below 0x80000000): uids are never reused, and
+ * a game that creates and deletes lightweight mutexes all the time passed the old 1024 pages (1,048,576 objects) after
+ * about an hour of play -- the index past the directory then read the static after it as a page pointer and stored
+ * through it (a crash at host address 0x1) */
+#define OBJ_DIR (1 << 19)
+static Obj **obj_pages[OBJ_DIR];
 static int nobjs;
-static Obj *obj_at(uint32_t i) { Obj **p = i / OBJ_PAGE < 1024 ? obj_pages[i / OBJ_PAGE] : 0; return p ? p[i % OBJ_PAGE] : 0; }
+static Obj *obj_at(uint32_t i) { Obj **p = i / OBJ_PAGE < OBJ_DIR ? obj_pages[i / OBJ_PAGE] : 0; return p ? p[i % OBJ_PAGE] : 0; }
 typedef struct WorkNode { Obj *o; struct WorkNode *next; } WorkNode;
 static WorkNode *by_work_hash[1 << 16];
 static Obj *new_obj(int kind, uint32_t name, uint32_t attr) {
@@ -865,6 +870,7 @@ static Obj *new_obj(int kind, uint32_t name, uint32_t attr) {
 	o->kind = kind; o->attr = attr;
 	snprintf(o->name, sizeof o->name, "%s", name ? (char *)G(name) : "");
 	klock_take();
+	if (nobjs >= 0x1ffeffff) { fprintf(stderr, "kernel: object uids used up (%d objects made): stopping\n", nobjs); abort(); }   /* (fails loudly: ~600 hours of the fastest creator seen) */
 	o->uid = 0x40020001 + 2 * nobjs;
 	if (!obj_pages[nobjs / OBJ_PAGE]) obj_pages[nobjs / OBJ_PAGE] = calloc(OBJ_PAGE, sizeof(Obj *));
 	obj_pages[nobjs / OBJ_PAGE][nobjs % OBJ_PAGE] = o;
