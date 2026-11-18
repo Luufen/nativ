@@ -418,6 +418,18 @@ decodes from the bytes the target stores (gfx_soft.c's target_write_of and apply
 
 It prints `420 checks, 0 failed` and exits 0.
 
+## Render-target views of U16 targets: `view_u16_test.c`
+
+Checks `runtime/gfx/view_u16.h`, the view mode gfx_gpu.c's view pass uses when a U16 texture reads memory a U16
+render target drew (sub-rectangles of one surface, such as an atlas read as quadrants): for every value the GPU
+target holds and every SWIZZLE1 texture swizzle, the view's value must equal what the texture decodes from the word
+the target stores (gfx_soft.c's to16, the U16 texel decode and apply_swizzle, restated as the oracle); other pairs stay
+refused. `-DVIEW_U16_UPSTREAM_RULE` builds the rule before it (no U16 view: every read downloaded the target) and fails.
+
+    cc -O1 -g -Wall -I../gfx view_u16_test.c -o /tmp/view_u16_test -lm && /tmp/view_u16_test
+
+It prints `29 checks, 0 failed` and exits 0.
+
 ## SceAudiodec's ATRAC9 decoder: `audiodec_test.c`
 
 Checks `runtime/audio/audiodec.c` (ATRAC9 through the vendored LibAtrac9): InitLibrary/CreateDecoder fill the info

@@ -23,6 +23,7 @@
 #include "target_scale.h"   /* RECOMP_TARGET_SCALE's rules (UC-LAMP: factor 0) */
 #include "fsr/fsr.h"
 #include "view_swz.h"
+#include "view_u16.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3864,7 +3865,7 @@ static int view_mode(uint32_t tgt_fmt, const GfxTexture *tex, uint32_t *tex_bpp,
 	 * formats (U8) place the one value; the HDR packed formats take none */
 	static const uint8_t sw4[8][4] = { {0,1,2,3}, {2,1,0,3}, {3,2,1,0}, {1,2,3,0}, {0,1,2,5}, {2,1,0,5}, {3,2,1,5}, {1,2,3,5} };
 	static const uint8_t sw1[8][4] = { {0,4,4,5}, {0,4,4,4}, {0,5,5,5}, {0,0,0,0}, {0,0,0,4}, {0,0,0,5}, {4,4,4,0}, {5,5,5,0} };
-	int ncomp = xb == 0x0c000000u || xb == 0x0d000000u || xb == 0x1b000000u || xb == 0x0e000000u ? 4 : xb == 0x00000000u || xb == 0x12000000u || xb == 0x13000000u ? 1 : 0;
+	int ncomp = xb == 0x0c000000u || xb == 0x0d000000u || xb == 0x1b000000u || xb == 0x0e000000u ? 4 : xb == 0x00000000u || xb == 0x09000000u || xb == 0x12000000u || xb == 0x13000000u ? 1 : 0;   /* (U16: one component, as gfx_soft.c swizzle_ncomp) */
 	for (int k = 0; k < 4; k++) swz[k] = ncomp == 4 ? sw4[sw][k] : ncomp == 1 ? sw1[sw][k] : (uint32_t)k;
 	switch (tb) {
 	case 0x80800000u: *tex_bpp = 1; return xb == 0x00000000u ? 5 : -1;                          /* U8 as U8 */
@@ -3874,6 +3875,9 @@ static int view_mode(uint32_t tgt_fmt, const GfxTexture *tex, uint32_t *tex_bpp,
 		swz[0] = 0; swz[1] = 1; swz[2] = 4; swz[3] = 5; return 0;
 	case 0x60800000u: return xb == 0x0e000000u && !((tgt_fmt >> 20) & 3) ? 0 : -1;             /* U2U10U10U10 as U2U10U10U10, ABGR (kept as RGBA8 here:
 	                                                                                               * Gravity Rush's scene target, composited every frame) */
+	case 0x40800000u: return view_u16_mode(tgt_fmt, tex->format, tex_bpp);                    /* U16 as U16 (view_u16.h): a U16 surface read as sub-rectangles
+	                                                                                               * (a 768x768 atlas read as three 384x384 quadrants) came down whole
+	                                                                                               * on every read, ~35 ms a frame */
 	case 0x10800000u: return xb == 0x12000000u || xb == 0x13000000u ? 6 : -1;                                        /* F32 as F32 (mode 5's decode at full precision: Uncharted's
 	                                                                                               * shadow mask went through guest memory, its lighting read
 	                                                                                               * it at 1x and every lit silhouette got a 1x-pixel halo) */
