@@ -430,6 +430,18 @@ refused. `-DVIEW_U16_UPSTREAM_RULE` builds the rule before it (no U16 view: ever
 
 It prints `29 checks, 0 failed` and exits 0.
 
+## Partial downloads of a render target: `target_rows_test.c`
+
+Checks `runtime/gfx/target_rows.h`, the rows of a render target gfx_gpu.c brings down to guest memory when a texture
+reads a small part of a big GPU-drawn target in a layout no view serves (a 32x32 U8 texture inside a 768x1024
+U8U8U8U8 target): over a model target read at many places and sizes, the texture must get every byte as the GPU has
+it, a texture of at most a quarter of the target must bring down only the rows it touches, and the other rows keep
+guest memory's bytes. `-DTARGET_ROWS_UPSTREAM_RULE` builds the rule before it (always the whole target) and fails.
+
+    cc -O1 -g -Wall -I../gfx target_rows_test.c -o /tmp/target_rows_test && /tmp/target_rows_test
+
+It prints `1628 checks, 0 failed` and exits 0.
+
 ## SceAudiodec's ATRAC9 decoder: `audiodec_test.c`
 
 Checks `runtime/audio/audiodec.c` (ATRAC9 through the vendored LibAtrac9): InitLibrary/CreateDecoder fill the info
