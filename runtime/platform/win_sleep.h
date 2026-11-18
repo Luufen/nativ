@@ -12,6 +12,7 @@
 #define WIN_SLEEP_H
 #include <windows.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #define WIN_SLEEP_SPIN_NS 1000000ull   /* below 1 ms: yield to the deadline */
 #define WIN_SLEEP_MIN_NS 100000ull     /* but never shorter than 100 us: a guest's lock-poll loop (lock, check, unlock, DelayThread(1))
@@ -27,7 +28,9 @@ static inline uint64_t win_sleep_now_ns(void) {
 static inline void win_sleep_ns(uint64_t ns) {
 #ifndef WIN_SLEEP_LEGACY
 	if (ns < WIN_SLEEP_SPIN_NS) {
-		const uint64_t end = win_sleep_now_ns() + (ns < WIN_SLEEP_MIN_NS ? WIN_SLEEP_MIN_NS : ns);
+		static int64_t floor_ns = -1;   /* RECOMP_SLEEP_FLOOR_US=n: another floor (diagnosis; the default WIN_SLEEP_MIN_NS) */
+		if (floor_ns < 0) { const char *e = getenv("RECOMP_SLEEP_FLOOR_US"); floor_ns = e && *e ? (int64_t)atol(e) * 1000 : (int64_t)WIN_SLEEP_MIN_NS; }
+		const uint64_t end = win_sleep_now_ns() + (ns < (uint64_t)floor_ns ? (uint64_t)floor_ns : ns);
 		do SwitchToThread(); while (win_sleep_now_ns() < end);   /* (at least one yield: DelayThread(0) still gives the core up) */
 		return;
 	}
