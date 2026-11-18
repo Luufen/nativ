@@ -442,6 +442,18 @@ guest memory's bytes. `-DTARGET_ROWS_UPSTREAM_RULE` builds the rule before it (a
 
 It prints `1628 checks, 0 failed` and exits 0.
 
+## Frame rates at which a game runs faster: `frame_rates_fast_test.c`
+
+Checks `runtime/ui/frame_rates.h`'s marker for rates at which a game runs faster than normal (a pack's RUN_ENV
+`RECOMP_FRAME_RATES_FAST=60,120`: its simulation steps once a presented frame): the parsing (only 60 and 120, only rates
+the game allows, none without the marker), the per-rate test, the words of the menu's and the launcher's hint, and
+the setting such a game uses (only its own choice: a shared 60 or 120 gives 30). `-DFRAME_RATES_FAST_BEFORE` builds
+the checks against the header before the marker (no fast rates, the shared value taken) and fails.
+
+    cc -O1 -Wall -I ../ui frame_rates_fast_test.c -o /tmp/frame_rates_fast_test && /tmp/frame_rates_fast_test
+
+It prints `26 checks, 0 failed` and exits 0.
+
 ## SceAudiodec's ATRAC9 decoder: `audiodec_test.c`
 
 Checks `runtime/audio/audiodec.c` (ATRAC9 through the vendored LibAtrac9): InitLibrary/CreateDecoder fill the info

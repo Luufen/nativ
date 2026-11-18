@@ -10,6 +10,9 @@
  *   grid runs at 120 Hz (its period 8333 us instead of the hardware's 16667), so a game that presents every vblank
  *   presents 120 times a second. Everything that counts vblanks then counts twice as many: a game timing itself in
  *   vblanks or fixed per-frame steps runs fast unless its pack hooks those steps -- why the rate is per game.
+ * - The rates at which a game runs faster than normal (its simulation steps once a presented frame): its pack's RUN_ENV
+ *   `RECOMP_FRAME_RATES_FAST` (e.g. "60,120"). The menu and the launcher keep offering them, with a hint (owner
+ *   2026-11-18, LittleBigPlanet). Only 60 and 120 count, and only rates the game allows; absent: none.
  * - A frame's time for those hooks (hooks.c frame_dt): the vblanks it took over the grid's rate, from one edge up to a
  *   30 fps frame (1/120 .. 1/30 s at 120, 1/60 .. 1/30 s otherwise).
  */
@@ -42,6 +45,41 @@ static inline int fr_effective(int setting, int allowed) {
 	if (setting >= 120 && (allowed & FR_120)) return 120;
 	if (setting >= 60 && (allowed & FR_60)) return 60;
 	return 30;
+}
+/* the rates (a mask of FR_60 / FR_120) at which a game that allows `allowed` runs faster than normal: the numbers 60 and
+ * 120 in `list` (RECOMP_FRAME_RATES_FAST); 30, other numbers and rates it doesn't allow are ignored; no list: none */
+static inline int fr_fast(const char *list, int allowed) {
+	if (!list) return 0;
+	int m = 0;
+	for (const char *p = list; *p; ) {
+		while (*p == ',' || *p == ' ' || *p == '	') p++;
+		if (!*p) break;
+		long v = 0; int digits = 0;
+		while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; digits++; }
+		if (digits) { if (v == 60) m |= FR_60; else if (v == 120) m |= FR_120; }
+		while (*p && *p != ',' && *p != ' ' && *p != '	') p++;
+	}
+	return m & allowed;
+}
+/* the frame_rate setting a game uses: in a game with fast rates only its own choice counts (a value from the shared
+ * settings -- the recommended 60, another game's 120 -- would make it run fast unasked), so a shared value there gives 30;
+ * `own`: the value is from the game's own settings file */
+static inline int fr_setting_for(int value, int own, int fast) { return fast && !own ? 30 : value; }
+/* does the game run faster than normal at `rate`? */
+static inline int fr_is_fast(int rate, int fast) { return rate > 30 && (fast & fr_bit(rate)) != 0; }
+/* the fast rates as words for a hint, into out (at least 12 bytes): "60", "120" or "60 and 120" (`and_word` between
+ * two: the UI language's "and"); returns how many rates (0: out is "") */
+static inline int fr_fast_words(int fast, const char *and_word, char *out, int cap) {
+	const char *a = (fast & FR_60) ? "60" : 0, *b = (fast & FR_120) ? "120" : 0;
+	int n = 0, k = 0; out[0] = 0;
+	const char *parts[3]; if (a) parts[n++] = a; if (b) parts[n++] = b;
+	for (int i = 0; i < n; i++) {
+		const char *w = i ? and_word : "";
+		if (i) { for (const char *q = " "; *q && k < cap - 1; q++) out[k++] = *q; for (const char *q = w; *q && k < cap - 1; q++) out[k++] = *q; if (k < cap - 1) out[k++] = ' '; }
+		for (const char *q = parts[i]; *q && k < cap - 1; q++) out[k++] = *q;
+	}
+	out[k] = 0;
+	return n;
 }
 /* the allowed rates, lowest first, into out[0..2]; returns how many (1..3) */
 static inline int fr_list(int allowed, int out[3]) {

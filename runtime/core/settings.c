@@ -77,6 +77,7 @@ int settings_game_option(const char *name) {
 	return 0;
 }
 int settings_has(const char *key) { pthread_mutex_lock(&mx); int i = lookup(key); pthread_mutex_unlock(&mx); return i >= 0; }
+int settings_own_has(const char *key) { pthread_mutex_lock(&mx); int i = find(key, GAME); pthread_mutex_unlock(&mx); return i >= 0; }
 const char *settings_str(const char *key, const char *def, char *buf, int bufsize) {
 	pthread_mutex_lock(&mx);
 	int i = lookup(key);
