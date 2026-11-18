@@ -1682,13 +1682,35 @@ def main():
             a = v & ~1
             if (v & 1) and a not in starts and a not in eset and in_gap(a):
                 gap.add(a)
+    def gap_ends(insns, term):
+        """candidate indexes of a gap function's last instruction, best first: its first return or unconditional b at
+        or past the furthest forward target of its own direct branches inside the decoded span (a switch's cases can
+        sit after the first b -- PSN-NOVA, PCSH00143: fn_8225fa1c "cmp r1,#0; beq 0x8225fa94; ...; b 0x8225fa6c", its
+        cases at 0x8225fa60..0x8225fa94 were cut off and called as externals, a run stopped on the first), then its
+        first return or b (what the pass took before: a caller keeps it when the longer decode has no end or is junk,
+        so no gap function is lost -- a lone "b" trampoline into a big body still is one)"""
+        if not insns:
+            return []
+        far, lo, hi, first, ext = insns[0].address, insns[0].address, insns[-1].address, None, None
+        for k, i in enumerate(insns):
+            m = i.mnemonic.split(".")[0]
+            t = i.op_str.rsplit("#", 1)[-1]   # (the light decode has no operands: a direct branch's target is "#0x...")
+            if (m in ("b", "cbz", "cbnz") or (m[:1] == "b" and m[1:] in COND)) and t.startswith("0x") and lo <= int(t, 16) <= hi:
+                far = max(far, int(t, 16))
+            if term(i):
+                first = k if first is None else first
+                if i.address >= far:
+                    ext = k
+                    break
+        return [e for e in dict.fromkeys((ext, first)) if e is not None]
     ngap = 0
     for a in sorted(gap):
         nxt = los[bisect.bisect_right(los, a)] if bisect.bisect_right(los, a) < len(los) else a + 0x40
         insns = decode([(a, min(nxt, a + 0x400) - 1)], False)
-        end = next((k for k, i in enumerate(insns) if (i.mnemonic == "bx" and i.op_str == "lr")
-                    or (i.mnemonic in ("pop", "pop.w") and "pc" in i.op_str) or i.mnemonic in ("b", "b.w")), None)
-        if not insns or insns[0].address != a or end is None or junk(insns[:end + 1]):
+        end = next((e for e in gap_ends(insns, lambda i: (i.mnemonic == "bx" and i.op_str == "lr")
+                    or (i.mnemonic in ("pop", "pop.w") and "pc" in i.op_str) or i.mnemonic in ("b", "b.w"))
+                    if not junk(insns[:e + 1])), None)
+        if not insns or insns[0].address != a or end is None:
             continue
         eset.add(a); ngap += 1
         fns.append(Fn(a, ([(a, min(nxt, a + 0x400) - 1)], False, end + 1), eset, lite=insns[:end + 1]))
@@ -1717,10 +1739,11 @@ def main():
         nxt = los[bisect.bisect_right(los, a)] if bisect.bisect_right(los, a) < len(los) else a + 0x40
         nxt = min([nxt] + [hi for lo, hi in text if lo <= a < hi])   # (not past its block: no bytes there to decode)
         insns = decode([(a, min(nxt, a + 0x400) - 1)], True)
-        end = next((k for k, i in enumerate(insns) if (i.mnemonic == "bx" and i.op_str == "lr")
-                    or (i.mnemonic in ("pop", "ldm", "ldmia") and "pc" in i.op_str) or i.mnemonic == "b"), None)
-        if not insns or insns[0].address != a or end is None or junk(insns[:end + 1]) \
-                or any(insns[k].address + insns[k].size != insns[k + 1].address for k in range(end)):
+        end = next((e for e in gap_ends(insns, lambda i: (i.mnemonic == "bx" and i.op_str == "lr")
+                    or (i.mnemonic in ("pop", "ldm", "ldmia") and "pc" in i.op_str) or i.mnemonic == "b")
+                    if not junk(insns[:e + 1]) and all(insns[k].address + insns[k].size == insns[k + 1].address
+                                                       for k in range(e))), None)
+        if not insns or insns[0].address != a or end is None:
             continue
         eset.add(a); narm += 1
         fns.append(Fn(a, ([(a, min(nxt, a + 0x400) - 1)], True, end + 1), eset, arm=True, lite=insns[:end + 1]))
