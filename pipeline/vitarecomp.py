@@ -1164,7 +1164,8 @@ def cmd_report(T):
 # ---- a game with no pack: pack-init and bootstrap (pipeline/bootstrap.py)
 
 def cmd_pack_init(T, force):
-    W = os.path.join(DUMP, "decrypted", T); app0 = os.path.join(W, "app0"); own = T.split("_")[0]
+    W = os.path.join(DUMP, "decrypted", T); own = T.split("_")[0]
+    app0 = os.path.join(W, "app0_patched" if os.path.isdir(os.path.join(W, "app0_patched")) else "app0")
     if not TITLE_RE.match(own): die(f"vitarecomp pack-init: a title id, such as PCSB00672 (not {T})")
     have = packconf.pack_for(PACKS, own)
     if have and not force: die(f"{T}: plays with packs/{have}/pack.toml already (--force writes a new packs/{own}/pack.toml anyway)")

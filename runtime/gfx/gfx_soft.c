@@ -759,8 +759,10 @@ static int swizzle_ncomp(uint32_t base) {
 	return base == 0x00000000u || base == 0x01000000u || base == 0x09000000u || base == 0x0a000000u || base == 0x0b000000u || base == 0x12000000u || base == 0x13000000u || base == 0x88000000u ? 1
 	     : base == 0x0c000000u || base == 0x0d000000u || base == 0x1b000000u || base == 0x02000000u || base == 0x04000000u || base == 0x0e000000u || (base >= 0x85000000u && base <= 0x87000000u)
 	       || base == 0x94000000u || base == 0x95000000u ? 4   /* P4 / P8: their palette entries are U8U8U8U8 */
-	     : base == 0x98000000u || base == 0x99000000u ? 3 : 0;
+	     : base == 0x19000000u || base == 0x98000000u || base == 0x99000000u ? 3 : 0;
 }
+static void se5m9_unpack(uint32_t p, float c[4]);
+static uint32_t se5m9_pack(float r, float g, float b);
 static float small_float(uint32_t v, int mbits);
 static void texel_raw(const GfxTexture *t, float u, float v, float out[4]);
 static void tex_gamma(const GfxTexture *t, float out[4]);   /* below */
@@ -857,8 +859,8 @@ void gfx_texture_level(const GfxTexture *t, int level, GfxTexture *out) { mip_vi
  * read nearly black, and every floor's ambient light with it. */
 static uint32_t cube_face_bytes(const GfxTexture *t) {
 	uint32_t base = t->format & 0xff000000u, bpt = tex_bytes_per_texel(base);
-	if (!((t->v_mode >> 4) & 15))   /* no mips: the faces follow each other directly */
-		return bpt ? (uint32_t)tex_stride(t) * t->height * bpt : ((t->width + 3) / 4) * ((t->height + 3) / 4) * bc_block_bytes(base);
+	if (!((t->v_mode >> 4) & 15))   /* no mips: tightly packed swizzled faces, without a linear row stride */
+		return bpt ? (uint32_t)t->width * t->height * bpt : ((t->width + 3) / 4) * ((t->height + 3) / 4) * bc_block_bytes(base);
 	int bw, bh, bbytes, minblocks; block_dims(base, &bw, &bh, &bbytes, &minblocks);
 	uint32_t w = 1, h = 1, total = 0; while (w < t->width) w <<= 1; while (h < t->height) h <<= 1;
 	uint32_t w0 = w, h0 = h, bits = (uint32_t)bbytes * 8 / (uint32_t)(bw * bh);
@@ -920,7 +922,7 @@ static uint32_t tex_bytes_per_texel(uint32_t base) {
 	switch (base) {
 	case 0x1b000000u: case 0x1e000000u: return 8;                                         /* F16F16F16F16 / F32F32 */
 	case 0x0c000000u: case 0x0d000000u: case 0x15000000u: case 0x9a000000u: case 0x12000000u:
-	case 0x11000000u: case 0x1a000000u: case 0x13000000u: case 0x0e000000u: return 4;     /* *8U8U8U8/S8S8S8S8/X8U24/U2F10F10F10/F32/F16F16/F11F11F10/F32M/U2U10U10U10 */
+	case 0x11000000u: case 0x19000000u: case 0x1a000000u: case 0x13000000u: case 0x0e000000u: return 4; /* *8U8U8U8/S8S8S8S8/X8U24/U2F10F10F10/F32/F16F16/SE5M9M9M9/F11F11F10/F32M/U2U10U10U10 */
 	case 0x05000000u: case 0x09000000u: case 0x0a000000u: case 0x0b000000u: case 0x07000000u:
 	case 0x02000000u: case 0x04000000u: return 2;                                          /* U5U6U5/U16/S16/F16/U8U8/U4U4U4U4/U1U5U5U5 */
 	case 0x98000000u: case 0x99000000u: return 3;                                          /* U8U8U8 / S8S8S8: three bytes, no padding */
@@ -1211,6 +1213,9 @@ static void texel_raw(const GfxTexture *t, float u, float v, float out[4]) {
 		uint16_t p = RD16(at + 2 * texel_index(t, x, y)); for (int k = 0; k < 4; k++) out[k] = ((p >> (4 * k)) & 15) / 15.f;
 	} else if (base == 0x04000000u) {    /* U1U5U5U5, ABGR: R in the low 5 bits, A the top bit */
 		uint16_t p = RD16(at + 2 * texel_index(t, x, y)); out[0] = (p & 31) / 31.f; out[1] = ((p >> 5) & 31) / 31.f; out[2] = ((p >> 10) & 31) / 31.f; out[3] = (float)(p >> 15);
+	} else if (base == 0x19000000u) {    /* SE5M9M9M9: unsigned 9-bit R, G and B mantissas with a shared 5-bit exponent,
+	                                       * R lowest; each component is mantissa * 2^(exponent - 24) */
+		se5m9_unpack(RD32(at + 4 * texel_index(t, x, y)), out);
 	} else if (base == 0x1a000000u) {    /* F11F11F10: unsigned 6-bit-mantissa R, G and 5-bit B floats, R lowest (an HDR
 	                                       * buffer sampled as a texture: Unit 13's colour-grading pass; undecoded, it read as magenta) */
 		uint32_t p = RD32(at + 4 * texel_index(t, x, y));
@@ -1224,6 +1229,24 @@ static void texel_raw(const GfxTexture *t, float u, float v, float out[4]) {
 		if (!seen && nw < 64) { warned[nw++] = t->format; fprintf(stderr, "    soft: texture format %#x not handled\n", t->format); gap(GAP_TEX_FORMAT, t->format, "texture format not decoded (sampled as magenta)"); }
 		out[0] = 1; out[1] = 0; out[2] = 1; out[3] = 1;
 	}
+}
+static void se5m9_unpack(uint32_t p, float c[4]) {
+	int e = (int)(p >> 27) - 24;
+	c[0] = ldexpf((float)(p & 0x1ff), e); c[1] = ldexpf((float)((p >> 9) & 0x1ff), e);
+	c[2] = ldexpf((float)((p >> 18) & 0x1ff), e); c[3] = 1;
+}
+static uint32_t se5m9_pack(float r, float g, float b) {
+	float c[3] = {r, g, b};
+	for (int k = 0; k < 3; k++) c[k] = !(c[k] > 0) ? 0 : c[k] > 65408.f ? 65408.f : c[k];
+	float mx = c[0] > c[1] ? c[0] : c[1]; if (c[2] > mx) mx = c[2];
+	if (!(mx > 0)) return 0;
+	int fe, e = (frexpf(mx, &fe), fe + 15);
+	if (e < 0) e = 0; else if (e > 31) e = 31;
+	float scale = ldexpf(1.f, e - 24);
+	if ((uint32_t)(mx / scale + .5f) > 511 && e < 31) { e++; scale *= 2; }
+	uint32_t m[3];
+	for (int k = 0; k < 3; k++) { m[k] = (uint32_t)(c[k] / scale + .5f); if (m[k] > 511) m[k] = 511; }
+	return m[0] | m[1] << 9 | m[2] << 18 | (uint32_t)e << 27;
 }
 /* ---- colour targets by format (SceGxmColorFormat: base format in the bits 0xF1800000, swizzle
  * in 0x00300000, components named most significant first). HDR and G-buffer targets (half/float,
@@ -1335,6 +1358,11 @@ static void target_read_raw_of(const GfxTarget *t, int x, int y, float c[4]) {
 	case 0x11000000u: { uint32_t r = RD32(a), g = RD32(a + 4); memcpy(&c[0], &r, 4); memcpy(&c[1], &g, 4); c[2] = 0; c[3] = 1; return; }
 	case 0x10800000u: { uint32_t r = RD32(a); memcpy(&c[0], &r, 4); c[1] = c[2] = 0; c[3] = 1; return; }
 	case 0x41000000u: { uint32_t p = RD32(a); c[0] = small_float(p & 0x3ff, 5); c[1] = small_float((p >> 10) & 0x3ff, 5); c[2] = small_float((p >> 20) & 0x3ff, 5); c[3] = (p >> 30) / 3.f; return; }
+	case 0x31000000u: {
+		float p[4]; se5m9_unpack(RD32(a), p);
+		if (((t->format >> 20) & 3) == 1) { c[0] = p[2]; c[1] = p[1]; c[2] = p[0]; } else { c[0] = p[0]; c[1] = p[1]; c[2] = p[2]; }
+		c[3] = 1; return;
+	}
 	case 0x60800000u: {   /* U2U10U10U10: three 10-bit components and a 2-bit alpha, in the 8-bit formats' orders (u10_unpack) */
 		u10_unpack(RD32(a), (t->format >> 20) & 3, c); return;
 	}
@@ -1397,6 +1425,11 @@ static void target_write_raw_of(const GfxTarget *t, int x, int y, const float c[
 	case 0x41000000u: {
 		uint32_t al = c[3] <= 0 ? 0 : c[3] >= 1 ? 3 : (uint32_t)(c[3] * 3 + .5f);
 		WR32(a, to_small_float(c[0], 5) | to_small_float(c[1], 5) << 10 | to_small_float(c[2], 5) << 20 | al << 30); return;
+	}
+	case 0x31000000u: {
+		float r = c[0], b = c[2];
+		if (((t->format >> 20) & 3) == 1) { r = c[2]; b = c[0]; }
+		WR32(a, se5m9_pack(r, c[1], b)); return;
 	}
 	case 0x21000000u: WR32(a, to_small_float(c[0], 6) | to_small_float(c[1], 6) << 11 | to_small_float(c[2], 5) << 22); return;
 	case 0x60800000u: WR32(a, u10_pack(c, (t->format >> 20) & 3)); return;            /* U2U10U10U10 */

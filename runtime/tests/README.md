@@ -65,6 +65,26 @@ unreached checkpoint reports unknown rather than a mismatch).
 It prints `N checks, 0 failed`, then the `  checkpoint:` line the fingerprint test renders, and
 exits 0. A failed check names its line.
 
+## Dynamic texture sampling and fragment LDST: `usse_smp_test.c`
+
+Checks the USSE-to-SPIR-V path for both dependent samplers and texture-buffer indexing. A dependent
+sampler must bind only its SA-resolved unit. A dynamic explicit-LOD 2D sample must bind all
+compatible units and emit a structured `OpSwitch`/`OpPhi`; cube samples bind only compatible cube
+units. An implicit-LOD dynamic sample must compute coordinate derivatives before that switch and
+sample each selected unit with explicit gradients, keeping derivative operations out of
+non-uniform control flow.
+
+The same fixture combines those samples with fragment `LDST` loads. Small modules retain the
+render-target image fast path with structured target-vs-memory selection; modules already using 16
+samplers switch their LDST windows to storage buffers so the fragment stage does not exceed the
+portable sampled-resource budget. It also checks container-18 thread-buffer metadata: an
+interpreter store/load must round-trip through per-invocation memory, and SPIR-V must use a
+`Private` array without declaring a guest-memory or target resource.
+
+    cc -O1 -g -Wall -D_GNU_SOURCE $INC usse_smp_test.c ../gfx/usse.c ../gfx/usse_spirv.c -o /tmp/usse_smp_test -lm && /tmp/usse_smp_test
+
+Set `SPIRV_VAL` to a `spirv-val` executable to validate the generated modules too.
+
 ## Touch gestures: `gesture_test.c`
 
 Checks `runtime/input/gesture.c`, the Vita's gesture library (SceSystemGesture): its touch tracker and its tap, drag,
@@ -349,10 +369,11 @@ It prints `15 checks, 0 failed` and exits 0.
 NIGHT-01 USSE-CF: `usse_spirv.c` turned only predicated forward skips into structured SPIR-V; an if/else (a skip range
 ending in an unconditional forward branch) or a loop (an unconditional backward branch; predicated forward branches to
 just past it are breaks, to it continues) sent the whole draw to the CPU interpreter. The fixture hand-encodes branch
-and NOP words, decodes them with the real decoder and translates them: the old form, if/else, loop + break,
-break + continue, an if/else holding two loops (vertex and fragment), nested loops -- each must translate with the
-expected OpLoopMerge / OpSelectionMerge count and, with `SPIRV_VAL=<spirv-val>`, validate; two back edges to one header
-and a loop leaving its skip range must be refused cleanly. Before USSE-CF: 6 of the 6 new forms fail to translate.
+and NOP words, decodes them with the real decoder and translates them: the old form, if/else, a three-way ladder
+whose nested and outer selections share a closing jump, loop + break, break + continue, an if/else holding two loops
+(vertex and fragment), and nested loops. Each must translate with the expected OpLoopMerge / OpSelectionMerge count
+and, with `SPIRV_VAL=<spirv-val>`, validate; two back edges to one header and a loop leaving its skip range must be
+refused cleanly.
 
     cc -O1 -g -Wall -D_GNU_SOURCE -I ../gfx -I ../core -I ../../recompiler -I ../.. usse_cf_test.c ../gfx/usse.c ../gfx/usse_spirv.c -o /tmp/usse_cf_test -lm && /tmp/usse_cf_test
 

@@ -7,5 +7,6 @@ void gfxcap_scene(const GfxTarget *t);   /* gfx_dispatch.c, before the backend s
 void gfxcap_draw(const GfxDraw *d);
 void gfxcap_end_scene(void);
 void gfxcap_request(void);               /* window.c: F12 -- capture the next frames */
+void gfxcap_target_scene(const GfxTarget *t);   /* RECOMP_CAPTURE_TARGET_ADDR: capture this scene's frame, optionally after F12 */
 void gfxcap_present(uint32_t base, uint32_t width, uint32_t height, uint32_t pitch, uint32_t format);
 #endif

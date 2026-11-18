@@ -85,6 +85,8 @@ Captures let you take a frame apart in seconds, without running the game.
 
 | Switch | What it does |
 |---|---|
+| `RECOMP_CAPTURE_TARGET_ADDR=<hex>` | Record two presentation intervals when a scene first renders over the guest address. This triggers before the scene record, so one-draw transient targets are included. |
+| `RECOMP_CAPTURE_TARGET_F12=1`, `RECOMP_CAPTURE_TARGET_DELAY=n` | Arm the address trigger with F12 and optionally wait n presented frames before it may fire. This avoids synchronizing a full F12 capture while the input being diagnosed is still changing. |
 | `RECOMP_REPLAY_DUMP=1` | Print the scenes and draws as text, without rendering. |
 | `RECOMP_REPLAY_DRAWS=k` | Stop after draw k and write the target as it stands. |
 | `RECOMP_REPLAY_KEEP_TARGETS=1` | Never restore a surface the replay has already drawn. Later passes then read this replay's own output: the way to see a fix's effect downstream, and to read a GPU capture's G-buffer, whose memory copy is stale. |

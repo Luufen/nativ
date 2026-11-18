@@ -72,6 +72,11 @@ static const uint32_t usse_fpconst[64][2] = {
 /* the decoded micro-op array for a program's primary (vertex/fragment) or secondary (uniform
  * setup) code, straight from usse_get's cache -- the same array usse_run_primary/secondary walk. */
 const UOp *usse_program_code(const UsseProgram *p, int secondary, int *count);
+/* Container 18 (thread buffer): if SA word `sa` holds this program's per-invocation private
+ * buffer pointer, return its signed pointer bias and size in 32-bit words. */
+int usse_thread_buffer_info(const UsseProgram *p, int sa, int32_t *bias, uint32_t *words);
+int usse_texture_buffer_info(const UsseProgram *p, int sa, int32_t *bias, uint32_t *words);
+uint32_t usse_texture_buffer_word(const UsseProgram *p, uint32_t word);
 
 /* VDUAL (§3.5) has more operand roles than a UOp has slots -- a unified-store source (US, any
  * bank), three internal-register sources (I0-I2), a unified and an internal destination -- so its

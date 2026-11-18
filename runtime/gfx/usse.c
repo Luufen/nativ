@@ -68,9 +68,10 @@ enum {
 	H_FLAGS = 20, H_BUFFER_FLAGS = 24, H_PARAM_COUNT = 36, H_PARAM_OFF = 40, H_VARY_OFF = 44,
 	H_PRIM_REGS = 48, H_SEC_REGS = 50, H_TEMP_REGS1 = 52, H_TEMP_REGS2 = 56,
 	H_PRIM_INSTR_COUNT = 60, H_PRIM_OFF = 64, H_SEC_INSTR_COUNT = 68, H_SEC_OFF = 72, H_SEC_OFF_END = 76,
-	H_LITERAL_SIZE = 88, H_DEFAULT_UNIFORMS = 100, H_LITERAL_DATA_OFF = 104,
+	H_THREAD_SIZE = 84, H_LITERAL_SIZE = 88, H_TEXTURE_SIZE = 96, H_DEFAULT_UNIFORMS = 100, H_LITERAL_DATA_OFF = 104,
 	H_LITERALS_COUNT = 112, H_LITERALS_OFF = 116, H_UBINFO_COUNT = 120, H_UBINFO_OFF = 124,
 	H_DEPSAMP_COUNT = 128, H_DEPSAMP_OFF = 132, H_CONTAINER_COUNT = 144, H_CONTAINER_OFF = 148,
+	H_TEXDEPSAMP_COUNT = 136, H_TEXDEPSAMP_OFF = 140,
 };
 static uint32_t h_param_base(uint32_t p) { return RD32(p + H_PARAM_OFF) ? p + H_PARAM_OFF + RD32(p + H_PARAM_OFF) : 0; }
 static uint32_t param_at(uint32_t base, int i) { return base + 16 * i; }
@@ -675,6 +676,14 @@ struct UsseProgram {
 	UsseVertexLayout vl;
 	UsseFragLayout fl;
 	uint32_t literal_addr, literal_words;   /* container 16's data, for the uniform-buffer-address table */
+	uint32_t thread_words;                  /* container 18's per-invocation private words */
+	int nthread;
+	struct { int sa; int32_t bias; } thread[8];
+	uint32_t texture_words;                 /* container 15's synthetic four-word sampler descriptors */
+	int texture_sa;
+	int32_t texture_bias;
+	uint8_t texture_word_value[64];
+	uint8_t texture_layout_mapped;
 	int8_t additive;   /* usse_fragment_fb_blend's answer + 1, once asked (0: not yet) */
 	int8_t packed8;    /* usse_fragment_colour_packed8's answer + 1, once asked (0: not yet) */
 	struct UsseProgram *next, *hnext;   /* the address table's chain; the content table's chain (decoded entries only) */
@@ -689,7 +698,32 @@ typedef struct {
 	 * was reading, and lanes 1-2 came out scaled by lane 0's result) */
 	int staging, cur_rep, nst;
 	struct { uint8_t bank; uint16_t num; uint32_t word; } st[64];
+	const UsseProgram *p;
+	uint8_t *thread;
+	uint32_t thread_bytes;
 } Ctx;
+
+static int thread_buffer_info(const UsseProgram *p, int sa, int32_t *bias, uint32_t *words) {
+	if (!p || !p->thread_words) return 0;
+	for (int i = 0; i < p->nthread; i++) if (p->thread[i].sa == sa) {
+		if (bias) *bias = p->thread[i].bias;
+		if (words) *words = p->thread_words;
+		return 1;
+	}
+	return 0;
+}
+static int texture_buffer_info(const UsseProgram *p, int sa, int32_t *bias, uint32_t *words) {
+	if (!p || !p->texture_words || p->texture_sa != sa) return 0;
+	if (bias) *bias = p->texture_bias;
+	if (words) *words = p->texture_words;
+	return 1;
+}
+static uint32_t texture_buffer_word_value(const UsseProgram *p, uint32_t word) {
+	if (!p || word >= p->texture_words) return 0;
+	if (p->texture_layout_mapped)
+		return word < sizeof p->texture_word_value ? p->texture_word_value[word] : 0;
+	return !(word & 3) && word / 4 < 16 ? word / 4 : 0;
+}
 
 static int g_trace_force;   /* usse_set_trace */
 static uint32_t bank_read_raw(Ctx *cx, int bank, int num) {
@@ -1263,10 +1297,18 @@ static void exec_smp(Ctx *cx, const UOp *op) {
 }
 static void exec_ldst(Ctx *cx, const UOp *op) {
 	int elemsz = op->args[3], is_store = op->sub2;
+	int32_t thread_bias = 0; uint32_t thread_words = 0;
+	int is_thread = !cx->secondary && op->s0.bank == BK_SA &&
+	                thread_buffer_info(cx->p, op->s0.num, &thread_bias, &thread_words) &&
+	                cx->thread && cx->thread_bytes >= thread_words * 4;
+	int32_t texture_bias = 0; uint32_t texture_words = 0;
+	int is_texture = !cx->secondary && op->s0.bank == BK_SA &&
+	                 texture_buffer_info(cx->p, op->s0.num, &texture_bias, &texture_words);
+	(void)texture_bias;
 	static const int unit[4] = {1, 1, 1, 1};
 	for (int r = 0; r < op->reps; r++) {
 		int off0 = slot_offset(cx, op->repmode, op->s0.bank, 0, r, unit), off1 = slot_offset(cx, op->repmode, op->s1.bank, 1, r, unit);
-		int off2 = slot_offset(cx, op->repmode, op->s2.bank, 2, r, unit), offd = slot_offset(cx, op->repmode, op->dst.bank, 3, r, unit);
+		int off2 = slot_offset(cx, op->repmode, op->s2.bank, 2, r, unit);
 		uint32_t base = read_i32(cx, &op->s0, off0, 0);
 		int32_t off = op->s1.bank == BK_IMM ? (int32_t)op->s1.num * elemsz : (int32_t)read_i32(cx, &op->s1, off1, 0) - 0x10000;
 		if (!op->args[0]) off += 4;
@@ -1278,13 +1320,29 @@ static void exec_ldst(Ctx *cx, const UOp *op) {
 			uint32_t addr = base + (uint32_t)off + read_i32(cx, &op->s2, off2, 0);
 			for (int i = 0; i < op->reps; i++) {
 				uint32_t a = addr + (uint32_t)(i * elemsz);
-				uint32_t v = elemsz == 4 ? RD32(a) : elemsz == 2 ? RD16(a) : RD8(a);
+				uint32_t v = 0;
+				if (is_thread) {
+					uint32_t rel = a - (uint32_t)thread_bias;
+					if (rel <= cx->thread_bytes - (uint32_t)elemsz) memcpy(&v, cx->thread + rel, (size_t)elemsz);
+				} else if (is_texture) {
+					int32_t index = (int32_t)a;
+					if (elemsz == 4 && index >= 0 && !(index & 3) &&
+					    (uint32_t)index / 4 < texture_words)
+						v = texture_buffer_word_value(cx->p, (uint32_t)index / 4);
+				} else v = elemsz == 4 ? RD32(a) : elemsz == 2 ? RD16(a) : RD8(a);
 				bank_write_raw(cx, op->dst.bank, op->dst.num + i, v);
 			}
 			break;
 		} else {
 			uint32_t addr = base + (uint32_t)off;
-			WR32(addr, read_i32(cx, &op->s2, off2, 0));
+			uint32_t v = read_i32(cx, &op->s2, off2, 0);
+			if (is_thread) {
+				uint32_t rel = addr - (uint32_t)thread_bias;
+				if (rel <= cx->thread_bytes - 4) memcpy(cx->thread + rel, &v, 4);
+			} else if (is_texture) {
+				fprintf(stderr, "usse: store to read-only texture buffer\n");
+				return;
+			} else WR32(addr, v);
 		}
 	}
 }
@@ -1512,11 +1570,20 @@ static void run_program(Ctx *cx, const UOp *code, int n) {
 /* RECOMP_TRACE_DRAW (gfx_soft.c): the trace switched on for one draw's programs only */
 void usse_set_trace(int on) { g_trace_force = on; }
 void usse_run_secondary(const UsseProgram *p, UsseInst *inst, UsseDraw *d) {
-	Ctx cx = {0}; cx.t = inst; cx.d = d; cx.secondary = 1;
+	Ctx cx = {0}; cx.t = inst; cx.d = d; cx.p = p; cx.secondary = 1;
 	run_program(&cx, p->sec, p->nsec);
 }
 void usse_run_primary(const UsseProgram *p, UsseInst *inst, UsseDraw *d, void *texctx, UsseTexFn texfn) {
-	Ctx cx = {0}; cx.t = inst; cx.d = d; cx.texctx = texctx; cx.texfn = texfn;
+	static __thread uint8_t *thread;
+	static __thread uint32_t thread_cap;
+	if (p->thread_words > thread_cap) {
+		uint8_t *next = realloc(thread, (size_t)p->thread_words * 4);
+		if (!next) { fprintf(stderr, "usse: could not allocate %u-byte thread buffer\n", p->thread_words * 4); return; }
+		thread = next; thread_cap = p->thread_words;
+	}
+	if (p->thread_words) memset(thread, 0, (size_t)p->thread_words * 4);
+	Ctx cx = {0}; cx.t = inst; cx.d = d; cx.p = p; cx.texctx = texctx; cx.texfn = texfn;
+	cx.thread = thread; cx.thread_bytes = p->thread_words * 4;
 	run_program(&cx, p->prim, p->nprim);
 }
 /* ---------------------------------------------------------------- 4/7. program cache + layouts */
@@ -1684,6 +1751,9 @@ static uint32_t prog_content_hash(uint32_t addr, uint32_t *size) { return usse_g
 uint32_t usse_program_hash(const UsseProgram *p) { return p->hash; }
 uint32_t usse_content_hash(uint32_t prog_addr, uint32_t *size) { return prog_content_hash(prog_addr, size); }
 int usse_buffer_words(const UsseProgram *p, int c) { int base = 0, size = 0; return p && find_container(p->addr, c, &base, &size) && size > 0 ? size : 0; }   /* the words usse_setup_registers copies from uniform buffer c (0: the program reaches it only through pointers, LDST) */
+int usse_thread_buffer_info(const UsseProgram *p, int sa, int32_t *bias, uint32_t *words) { return thread_buffer_info(p, sa, bias, words); }
+int usse_texture_buffer_info(const UsseProgram *p, int sa, int32_t *bias, uint32_t *words) { return texture_buffer_info(p, sa, bias, words); }
+uint32_t usse_texture_buffer_word(const UsseProgram *p, uint32_t word) { return texture_buffer_word_value(p, word); }
 int usse_program_pa_words(const UsseProgram *p) { return p->pa_words; }
 uint32_t usse_float_to_lane(float v, int type) { return float_to_lane(v, type); }   /* the interpreter's own conversion, for gfx_soft.c's direct vertex packer */
 /* the decode itself, into p (usse_get's tables, or usse_decode_uncached's own) */
@@ -1718,6 +1788,39 @@ static void decode_program(UsseProgram *p, uint32_t prog_addr, uint32_t hash, ui
 	}
 	p->literal_words = RD32(prog_addr + H_LITERAL_SIZE) / 4;
 	p->literal_addr = prog_addr + H_LITERAL_DATA_OFF + RD32(prog_addr + H_LITERAL_DATA_OFF);
+	p->thread_words = RD32(prog_addr + H_THREAD_SIZE) / 64;
+	p->nthread = 0;
+	p->texture_words = RD32(prog_addr + H_TEXTURE_SIZE);
+	p->texture_sa = -1;
+	p->texture_layout_mapped = 0;
+	memset(p->texture_word_value, 0, sizeof p->texture_word_value);
+	uint32_t texture_map_count = RD32(prog_addr + H_TEXDEPSAMP_COUNT);
+	uint32_t texture_map_base = RD32(prog_addr + H_TEXDEPSAMP_OFF) ? prog_addr + H_TEXDEPSAMP_OFF + RD32(prog_addr + H_TEXDEPSAMP_OFF) : 0;
+	if (p->texture_words && texture_map_base && texture_map_count) {
+		p->texture_layout_mapped = 1;
+		for (uint32_t i = 0; i < texture_map_count; i++) {
+			uint32_t e = texture_map_base + 4 * i;
+			uint32_t rilo = RD16(e), word = RD16(e + 2);
+			uint32_t unit = rilo / 4, layout = rilo % 4;
+			if (!layout && unit < 16 && word < p->texture_words && word < sizeof p->texture_word_value)
+				p->texture_word_value[word] = (uint8_t)unit;
+		}
+	}
+	int c19base = 0, c19size = 0; find_container(prog_addr, 19, &c19base, &c19size);
+	uint32_t n = RD32(prog_addr + H_UBINFO_COUNT);
+	uint32_t base = RD32(prog_addr + H_UBINFO_OFF) ? prog_addr + H_UBINFO_OFF + RD32(prog_addr + H_UBINFO_OFF) : 0;
+	for (uint32_t i = 0; base && i < n; i++) {
+		uint32_t e = base + 8 * i;
+		int reside = RD16(e), sa = c19base + RD16(e + 2);
+		if (reside == 15 && p->texture_words && p->texture_sa < 0) {
+			p->texture_sa = sa;
+			p->texture_bias = (int32_t)RD32(e + 4);
+		} else if (reside == 18 && p->thread_words && p->nthread < 8) {
+			p->thread[p->nthread].sa = sa;
+			p->thread[p->nthread].bias = (int32_t)RD32(e + 4);
+			p->nthread++;
+		}
+	}
 }
 const UsseProgram *usse_get(uint32_t prog_addr) {
 	uint32_t size, hash = prog_content_hash(prog_addr, &size);
@@ -1847,17 +1950,26 @@ void usse_setup_registers(const UsseProgram *p, UsseDraw *d, uint32_t def_unifor
 	uint32_t ucnt = RD32(prog + H_UBINFO_COUNT), ubase = RD32(prog + H_UBINFO_OFF) ? prog + H_UBINFO_OFF + RD32(prog + H_UBINFO_OFF) : 0;
 	for (uint32_t i = 0; i < ucnt; i++) {
 		uint32_t e = ubase + 8 * i; int reside = RD16(e); int ldst_off = RD16(e + 2); int32_t bias = (int32_t)RD32(e + 4);
+		int at = c19base + ldst_off;
+		if (reside == 18) { if (at >= 0 && at < 256) d->sa[at].u = (uint32_t)bias; continue; }
+		if (reside == 15) { if (p->texture_words && at >= 0 && at < 256) d->sa[at].u = (uint32_t)bias; continue; }
 		uint32_t addr = 0;
 		if (reside <= 13) addr = ubuf ? ubuf[reside] : 0;
 		else if (reside == 14) addr = def_uniform_buf;
 		else if (reside == 16) addr = p->literal_addr;
-		if (addr) { int at = c19base + ldst_off; if (at >= 0 && at < 256) d->sa[at].u = addr + (uint32_t)bias; }
+		if (addr && at >= 0 && at < 256) d->sa[at].u = addr + (uint32_t)bias;
 	}
 	uint32_t depcnt = RD32(prog + H_DEPSAMP_COUNT), depbase = RD32(prog + H_DEPSAMP_OFF) ? prog + H_DEPSAMP_OFF + RD32(prog + H_DEPSAMP_OFF) : 0;
 	for (uint32_t i = 0; i < depcnt; i++) {
 		uint32_t e = depbase + 4 * i; int rilo = RD16(e), sa_off = RD16(e + 2);
 		int unitn = rilo / 4, word = rilo % 4;
-		if (word == 0) { int at = c19base + sa_off; if (at >= 0 && at < 256 && unitn < 255) d->sa_unit[at] = (uint8_t)(unitn + 1); }   /* the unit, beside the SA words (UsseDraw.sa_unit): those stay 0 */
+		if (word == 0) {
+			int at = c19base + sa_off;
+			if (at >= 0 && at < 256 && unitn < 255) {
+				d->sa_unit[at] = (uint8_t)(unitn + 1);
+				if (p->texture_words) d->sa[at].u = (uint32_t)unitn;
+			}
+		}
 	}
 }
 void usse_pack_attr(UsseInst *inst, const UsseAttrSlot *slot, const float comps[4], const void *raw, int rawlen) {

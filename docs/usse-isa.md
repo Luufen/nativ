@@ -101,7 +101,7 @@ blob's address to `sceGxmShaderPatcherRegister*`; the blob is never modified.
 | 84 | 4 | thread_buffer_count | bytes of per-thread scratch (thread buffer, container 18) |
 | 88 | 4 | literal_buffer_count | size of the literal buffer (container 16) |
 | 92 | 4 | data_buffer_count | |
-| 96 | 4 | texture_buffer_count | size of the texture buffer (container 15) |
+| 96 | 4 | texture_buffer_count | size, in 32-bit words, of the texture buffer (container 15) |
 | 100 | 4 | default_uniform_buffer_count | size, in 32-bit words, of the default uniform buffer (14) |
 | 104 | 4 | literal_buffer_data_offset | rel@104 → literal-buffer bytes |
 | 108 | 4 | compiler_version | version << 4 |
@@ -112,7 +112,7 @@ blob's address to `sceGxmShaderPatcherRegister*`; the blob is never modified.
 | 128 | 4 | dependent_sampler_count | |
 | 132 | 4 | dependent_sampler_offset | rel@132 → `SceGxmDependentSampler[...]` (§1.8) |
 | 136 | 4 | texture_buffer_dependent_sampler_count | |
-| 140 | 4 | texture_buffer_dependent_sampler_offset | rel@140 |
+| 140 | 4 | texture_buffer_dependent_sampler_offset | rel@140 → texture-buffer layout entries (§1.8) |
 | 144 | 4 | container_count | |
 | 148 | 4 | container_offset | rel@148 → `SceGxmProgramParameterContainer[container_count]` (§1.4) |
 | 152 | 4 | sampler_query_info_offset | rel@152 → array of `uint16_t` (unused by Vita3K) |
@@ -221,8 +221,7 @@ SA[container19.base_sa_offset + ldst_base_offset] = address_of(reside_buffer) + 
 - 16 (literal buffer): the address of the program's own literal data
   (`base + 104 + literal_buffer_data_offset`, `literal_buffer_count` bytes).
 - 15 (texture buffer): a block holding the 16-byte texture-control words of the bound textures
-  (`texture_buffer_count` bytes). Used for runtime-indexed texture selection; Vita3K supports
-  only a narrow case of it.
+  (`texture_buffer_count` 32-bit words). It is used for runtime-indexed texture selection.
 - 18 (thread buffer): per-thread private memory of `thread_buffer_count` bytes for the whole GPU.
   Vita3K assumes it is split evenly among 4 cores × 4 pipes and gives each invocation a private
   array of `thread_buffer_count / 64` floats. A CPU interpreter can give each invocation its own
@@ -303,6 +302,32 @@ So each texture used by an SMP instruction occupies **four consecutive SA regist
 "Dependent" means the coordinates are computed by the shader. Non-dependent reads are done by the
 iterator hardware before the program starts (§1.12). If a sampler has no symbol, its unit index is
 still recoverable from this table.
+
+The second table named by header offsets 136 and 140 uses the same four-byte entry shape, but its
+second field is a **container-15 word offset**, not an SA offset:
+
+| Off | Size | Field | Meaning |
+|---|---|---|---|
+| 0 | 2 | resource_index_layout_offset | `texture_unit * 4 + word` |
+| 2 | 2 | texture_buffer_word_offset | word in the container-15 texture buffer |
+
+This table is a layout map, not a redundant sampler list. Texture descriptors need not appear in
+unit order. For example, a program can place unit 1 at texture-buffer words 8–11 and unit 2 at
+words 4–7. An implementation that assumes `texture_buffer_word / 4` is the unit silently swaps or
+duplicates dynamically indexed samplers.
+
+Nativ does not expose Vita texture-control words to host shaders. When this layout table is
+present, entries for descriptor word 0 map their container-15 word to the texture-unit index and
+entries for words 1–3 read as zero. When the table is absent, Nativ retains the linear
+`{ texture_unit, 0, 0, 0 }` fallback. Container-15 `LDST` therefore returns the unit selected by
+the declared layout rather than deriving it from the buffer offset. Dependent-sampler entries
+whose layout position is word 0 receive the same numeric unit index.
+
+The container-15 base SA receives its signed `ldst_base_value`, so the usual `-4` bias combines
+with LDST's immediate byte offset exactly as it does on the Vita. Programs without a texture
+buffer keep dependent-sampler SA words numerically zero; their unit mapping remains separate
+metadata for direct SMP resolution. This distinction matters to shaders that copy or inspect
+descriptor words before sampling.
 
 `SceGxmTexture` control words, for reference (bit 0 = LSB of each word):
 

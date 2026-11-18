@@ -5,8 +5,9 @@ Why: one title's own NEON video decoder (its launcher's preview, its game's intr
 emulator is at hand, so each form it uses is checked on its own -- one tiny function per instruction, a fresh register
 file of random bytes (fixed seed), the result compared with a Python model written from the ARM ARM text (A8.8.x):
   arithmetic   VADD/VSUB/VMUL.I16, VRHADD.S16, VHADD.U8/.S16, VCGT.S16, VABD.S16, VQDMULH.S16
-  shifts       VSHR.S16/.U16/.S32, VSRA.S16, VRSHR.S16, VSHL.I16 (#), VSHLL.U8 #n, VMOVL.U8/.S16, VQSHRUN/VQRSHRUN.S16, VQMOVUN.S16
-  widening     VADDL.U8, VADDW.U8, VSUBL.U8
+  shifts       VSHR.S16/.U16/.S32, VSRA.S16, VRSHR.S16, VSHL.I16 (#), VSHLL.U8 #n, VMOVL.U8/.S16,
+               VRSHRN.I16, VQSHRUN/VQRSHRUN.S16, VQMOVUN.S16
+  widening     VADDL.U8, VADDW.U8, VSUBL.U8, VMULL/VMLAL/VMLSL.S16 by scalar
   bitwise      VAND/VORR/VEOR/VBIC, VBSL, VBIF, VBIT
   permutes     VTRN.16 q / .8 d, VZIP.16 d, VUZP.32 q, VSWP d, VREV64.32 d, VEXT.16 q / .32 d
   immediates   VMOV.I16 q, VMOV.I8 q
@@ -104,10 +105,11 @@ def widen(es_in, sg, f):
 t("vshll.u8 q4, d10, #6", shift2(1, 0xA, 0, 0, Q(4), 10, 8 + 6), widen(1, 0, lambda a: a << 6))
 t("vmovl.u8 q4, d10", shift2(1, 0xA, 0, 0, Q(4), 10, 8), widen(1, 0, lambda a: a))
 t("vmovl.s16 q4, d10", shift2(0, 0xA, 0, 0, Q(4), 10, 16), widen(2, 1, lambda a: a))
-def narrow(f):
+def narrow(f, signed=True):
     def m(r):
-        a = lanes(r, 10, 2, 2, 1); put(r, 8, 1, [f(x) for x in a])
+        a = lanes(r, 10, 2, 2, signed); put(r, 8, 1, [f(x) for x in a])
     return m
+t("vrshrn.i16 d8, q5, #2", shift2(0, 8, 0, 1, 8, Q(5), 16 - 2), narrow(lambda a: (a + 2) >> 2, False))
 t("vqshrun.s16 d8, q5, #6", shift2(1, 8, 0, 0, 8, Q(5), 16 - 6), narrow(lambda a: sat(a >> 6, 0, 255)))
 t("vqrshrun.s16 d8, q5, #6", shift2(1, 8, 0, 1, 8, Q(5), 16 - 6), narrow(lambda a: sat((a + 32) >> 6, 0, 255)))
 t("vqmovun.s16 d8, q5", misc2(0, 2, 0b00100, 1, 8, Q(5)), narrow(lambda a: sat(a, 0, 255)))
@@ -160,6 +162,19 @@ def mlx(sub, x, dm):
     return m
 t("vmla.i16 q4, q5, d3[2]", mlx_sc(0, 1, Q(4), Q(5), 3, 2), mlx(0, 2, 3))
 t("vmls.i16 q4, q5, d2[1]", mlx_sc(1, 1, Q(4), Q(5), 2, 1), mlx(1, 1, 2))
+def wide_mlx(kind, x, dm):
+    def m(r):
+        n, s = lanes(r, 10, 1, 2, 1), lanes(r, dm, 1, 2, 1)[x]
+        if kind == "mul":
+            out = [a * s for a in n]
+        else:
+            d = lanes(r, 8, 2, 4, 1)
+            out = [(a - b * s) if kind == "sub" else (a + b * s) for a, b in zip(d, n)]
+        put(r, 8, 4, out)
+    return m
+t("vmull.s16 q4, d10, d3[2]", 0xf29a8a63, wide_mlx("mul", 2, 3))
+t("vmlal.s16 q4, d10, d3[1]", 0xf29a824b, wide_mlx("add", 1, 3))
+t("vmlsl.s16 q4, d10, d3[1]", 0xf29a864b, wide_mlx("sub", 1, 3))
 
 # ---------------------------------------------------------------- check the encodings, build one function per form, run
 from capstone import Cs, CS_ARCH_ARM, CS_MODE_ARM

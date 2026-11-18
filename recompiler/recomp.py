@@ -759,28 +759,32 @@ class Fn:
             return [f"{{ {ty} a[{8 // es}]; {oty} o[{8 // es}]; memcpy(a, &c->vfp.d[{d}], 8); for (int k = 0; k < {8 // es}; k++) o[k] = ({oty})a[k];"
                     f" memcpy(&c->vfp.d[{q0}], o, 16); }}"]
         if mn == "vmull" and dt in ("u8", "s8", "u16", "s16", "u32", "s32") and regs[0][0] == "q" and regs[1][0] == "d" and regs[2][0] == "d":
-            # widening multiply: each element of dN times dM into twice the width (Killzone's blend/skinning code)
+            # widening multiply: each element of dN times dM (or a selected dM lane) into twice the width
             es = int(dt[1:]) // 8
             ty, oty = {("u", 1): ("uint8_t", "uint16_t"), ("s", 1): ("int8_t", "int16_t"), ("u", 2): ("uint16_t", "uint32_t"),
                        ("s", 2): ("int16_t", "int32_t"), ("u", 4): ("uint32_t", "uint64_t"), ("s", 4): ("int32_t", "int64_t")}[(dt[0], es)]
             q0, a, b = 2 * regs[0][1], regs[1][1], regs[2][1]
+            y = f"y[{ops[2].vector_index}]" if ops[2].vector_index >= 0 else "y[k]"
             return [f"{{ {ty} x[{8 // es}], y[{8 // es}]; {oty} o[{8 // es}]; memcpy(x, &c->vfp.d[{a}], 8); memcpy(y, &c->vfp.d[{b}], 8);"
-                    f" for (int k = 0; k < {8 // es}; k++) o[k] = ({oty})x[k] * ({oty})y[k]; memcpy(&c->vfp.d[{q0}], o, 16); }}"]
+                    f" for (int k = 0; k < {8 // es}; k++) o[k] = ({oty})x[k] * ({oty}){y}; memcpy(&c->vfp.d[{q0}], o, 16); }}"]
         if mn in ("vmlal", "vmlsl") and dt in ("u8", "s8", "u16", "s16", "u32", "s32") and regs[0][0] == "q" and regs[1][0] == "d" and regs[2][0] == "d":
-            # widening multiply-accumulate: qD +/- dN * dM at twice the width (SSD's blend/skinning code)
+            # widening multiply-accumulate: qD +/- dN * dM (or a selected dM lane) at twice the width
             es = int(dt[1:]) // 8
             ty, oty = {("u", 1): ("uint8_t", "uint16_t"), ("s", 1): ("int8_t", "int16_t"), ("u", 2): ("uint16_t", "uint32_t"),
                        ("s", 2): ("int16_t", "int32_t"), ("u", 4): ("uint32_t", "uint64_t"), ("s", 4): ("int32_t", "int64_t")}[(dt[0], es)]
             q0, a, b = 2 * regs[0][1], regs[1][1], regs[2][1]
             op = "+" if mn == "vmlal" else "-"
+            y = f"y[{ops[2].vector_index}]" if ops[2].vector_index >= 0 else "y[k]"
             return [f"{{ {ty} x[{8 // es}], y[{8 // es}]; {oty} o[{8 // es}]; memcpy(x, &c->vfp.d[{a}], 8); memcpy(y, &c->vfp.d[{b}], 8); memcpy(o, &c->vfp.d[{q0}], 16);"
-                    f" for (int k = 0; k < {8 // es}; k++) o[k] = ({oty})(o[k] {op} ({oty})x[k] * ({oty})y[k]); memcpy(&c->vfp.d[{q0}], o, 16); }}"]
-        if mn == "vshrn" and dt in ("i16", "i32", "i64") and regs[0][0] == "d" and regs[1][0] == "q" and len(ops) == 3 and ops[2].type == ARM_OP_IMM:
-            # narrowing shift right: each element of qM shifted right by the immediate (1..half width), the low half kept
+                    f" for (int k = 0; k < {8 // es}; k++) o[k] = ({oty})(o[k] {op} ({oty})x[k] * ({oty}){y}); memcpy(&c->vfp.d[{q0}], o, 16); }}"]
+        if mn in ("vshrn", "vrshrn") and dt in ("i16", "i32", "i64") and regs[0][0] == "d" and regs[1][0] == "q" and len(ops) == 3 and ops[2].type == ARM_OP_IMM:
+            # narrowing shift right: each element of qM shifted right by the immediate (1..half width), optionally rounded,
+            # with the low half kept
             es = int(dt[1:]) // 8; n = ops[2].imm
             ty, oty = {2: ("uint16_t", "uint8_t"), 4: ("uint32_t", "uint16_t"), 8: ("uint64_t", "uint32_t")}[es]
             d, q0 = regs[0][1], 2 * regs[1][1]
-            return [f"{{ {ty} a[{16 // es}]; {oty} o[{16 // es}]; memcpy(a, &c->vfp.d[{q0}], 16); for (int k = 0; k < {16 // es}; k++) o[k] = ({oty})(a[k] >> {n});"
+            shift = f"RSHR64_U((uint64_t)a[k], {n})" if mn == "vrshrn" else f"(a[k] >> {n})"
+            return [f"{{ {ty} a[{16 // es}]; {oty} o[{16 // es}]; memcpy(a, &c->vfp.d[{q0}], 16); for (int k = 0; k < {16 // es}; k++) o[k] = ({oty})({shift});"
                     f" memcpy(&c->vfp.d[{d}], o, 8); }}"]
         if mn in ("vqshrn", "vqshrun", "vqrshrn", "vqrshrun") and dt in ("s16", "s32", "s64", "u16", "u32", "u64") and not (mn[2] == "r" and dt[1:] == "64") and regs[0][0] == "d" and regs[1][0] == "q" and len(ops) == 3 and ops[2].type == ARM_OP_IMM:
             # saturating narrowing shift right: each element of qM shifted right by the immediate (signed:

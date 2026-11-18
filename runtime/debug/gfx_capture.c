@@ -46,15 +46,56 @@ static uint64_t bytes_written;
 /* the game presents from its display-queue thread and draws from its render thread: every entry
  * point holds this (a present closing the file under a draw being recorded crashed Unit 13) */
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t target_addr;
+static int target_initialized, target_triggered, target_armed, target_wait_f12;
+static long target_after_frame;
+
+static void target_init(void) {
+	if (target_initialized) return;
+	const char *e = getenv("RECOMP_CAPTURE_TARGET_ADDR");
+	target_addr = e ? (uint32_t)strtoul(e, 0, 0) : 0;
+	target_wait_f12 = getenv("RECOMP_CAPTURE_TARGET_F12") != 0;
+	target_armed = !target_wait_f12;
+	target_initialized = 1;
+}
 
 /* F12 (window.c): the next frames, whatever the game is doing -- the way to capture a screen no
  * scripted test reaches */
 void gfxcap_request(void) {
 	pthread_mutex_lock(&lock);
 	if (out) { pthread_mutex_unlock(&lock); return; }   /* one at a time */
+	target_init();
+	if (target_addr && target_wait_f12) {
+		const char *d = getenv("RECOMP_CAPTURE_TARGET_DELAY");
+		target_after_frame = frame + (d && atol(d) > 0 ? atol(d) : 0);
+		target_armed = 1;
+		fprintf(stderr, "capture target armed (F12, RECOMP_CAPTURE_TARGET_ADDR=%#x, after frame %ld)\n", target_addr, target_after_frame);
+		pthread_mutex_unlock(&lock);
+		return;
+	}
 	const char *n = getenv("RECOMP_CAPTURE_FRAMES");
 	nframes = n && atol(n) > 0 ? atol(n) : 3;
 	want = frame + 1; done = 0; requested = 1;
+	pthread_mutex_unlock(&lock);
+}
+/* Capture the current frame when a scene first renders over a requested guest address. Unlike F12,
+ * this arms before gfxcap_scene records the scene, so a transient one-draw target is not missed. */
+void gfxcap_target_scene(const GfxTarget *t) {
+	target_init();
+	if (!target_addr || !target_armed || target_triggered || frame < target_after_frame || !t->data) return;
+	const uint64_t end = (uint64_t)t->data + (uint64_t)gfx_target_bpp(t) * t->stride * t->height;
+	if (target_addr < t->data || target_addr >= end) return;
+	pthread_mutex_lock(&lock);
+	if (!out) {
+		target_triggered = 1;
+		/* Games may begin the next frame's first scene before the display thread presents the
+		 * previous one. Keep both presentation intervals so this scene's draws are recorded. */
+		nframes = 2;
+		want = frame;
+		done = 0;
+		requested = 1;
+		fprintf(stderr, "capture requested (RECOMP_CAPTURE_TARGET_ADDR=%#x)\n", target_addr);
+	}
 	pthread_mutex_unlock(&lock);
 }
 static int capturing(void);

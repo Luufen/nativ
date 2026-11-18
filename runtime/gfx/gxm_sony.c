@@ -51,9 +51,9 @@ static uint32_t bound(uint32_t v, uint32_t sentinel_mask) { return (v & 0xff0000
 /* bytes per texel of the uncompressed texture base formats (0: block-compressed or unknown) */
 static uint32_t tex_bpp(uint32_t format) {
 	switch (format & 0x1f000000u) {
-	case 0x1b000000u: case 0x19000000u: return 8;
+	case 0x1b000000u: return 8;
 	case 0x0c000000u: case 0x0d000000u: case 0x0e000000u: case 0x0f000000u: case 0x10000000u: case 0x11000000u: case 0x12000000u:
-	case 0x13000000u: case 0x14000000u: case 0x15000000u: case 0x16000000u: case 0x17000000u: case 0x1a000000u: return 4;
+	case 0x13000000u: case 0x14000000u: case 0x15000000u: case 0x16000000u: case 0x17000000u: case 0x19000000u: case 0x1a000000u: return 4;
 	case 0x02000000u: case 0x03000000u: case 0x04000000u: case 0x05000000u: case 0x06000000u: case 0x07000000u: case 0x08000000u:
 	case 0x09000000u: case 0x0a000000u: case 0x0b000000u: return 2;
 	case 0x00000000u: case 0x01000000u: return 1;

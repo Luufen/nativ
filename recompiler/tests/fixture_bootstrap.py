@@ -5,8 +5,8 @@
 2. loop(): a toy game -- a chain of functions, some the "analysis" only finds once they are seeds -- run by a fake
    Steps: missed, missed, frame reached (two seeds found); a seed the analysis ignores (missed_function_not_fixed);
    an unimplemented instruction; a failed build; a chain longer than --max.
-3. vitarecomp pack-init on a synthetic library (ATIV_DUMP, ATIV_PACKS in a temporary folder): a hand-built
-   minimal Vita ELF launcher importing sceAppMgrLoadExec, the program it launches importing SceMp4, a shipped
+3. vitarecomp pack-init on a synthetic library (ATIV_DUMP, ATIV_PACKS in a temporary folder): a base game and
+   layered update with hand-built minimal Vita ELF launchers, the updated program importing SceMp4, a shipped
    sce_module, a firmware libscemp4 -> the pack's ELF, MODULES, sha256, version and notes; packconf reads it.
 
     python recompiler/tests/fixture_bootstrap.py      -> "all passed (N ok)", exit 0
@@ -121,16 +121,21 @@ def vita_elf(imports_):
 
 with tempfile.TemporaryDirectory() as tmp:
     lib, packs = os.path.join(tmp, "library"), os.path.join(tmp, "packs")
-    app0 = os.path.join(lib, "decrypted", "PCSZ99999", "app0")
-    os.makedirs(os.path.join(app0, "sce_module")); os.makedirs(packs)
+    game = os.path.join(lib, "decrypted", "PCSZ99999")
+    app0, patched = os.path.join(game, "app0"), os.path.join(game, "app0_patched")
+    os.makedirs(os.path.join(app0, "sce_module")); os.makedirs(os.path.join(patched, "sce_module")); os.makedirs(packs)
     os.makedirs(os.path.join(lib, "firmware", "3.74", "os0", "us"))
     open(os.path.join(lib, "firmware", "3.74", "os0", "us", "libscemp4.suprx.elf"), "wb").close()   # (only its presence is read)
     launcher = vita_elf([("SceAppMgrUser", [0xE6774ABC]), ("SceLibKernel", [0x11111111])])        # sceAppMgrLoadExec
     main = vita_elf([("SceLibKernel", [0x22222222]), ("SceMp4", [0x33333333]), ("SceAvPlayer", [0x44444444])])
+    base_main = vita_elf([("SceLibKernel", [0x55555555])])
     open(os.path.join(app0, "eboot.bin.elf"), "wb").write(launcher)
-    open(os.path.join(app0, "toy.self.elf"), "wb").write(main)
-    open(os.path.join(app0, "sce_module", "libult.suprx"), "wb").close()
-    json.dump({"title_id": "PCSZ99999", "title": "Synthetic Toy", "version": "01.02"}, open(os.path.join(app0, "game.json"), "w"))
+    open(os.path.join(app0, "toy.self.elf"), "wb").write(base_main)
+    json.dump({"title_id": "PCSZ99999", "title": "Synthetic Base", "version": "01.00"}, open(os.path.join(app0, "game.json"), "w"))
+    open(os.path.join(patched, "eboot.bin.elf"), "wb").write(launcher)
+    open(os.path.join(patched, "toy.self.elf"), "wb").write(main)
+    open(os.path.join(patched, "sce_module", "libult.suprx"), "wb").close()
+    json.dump({"title_id": "PCSZ99999", "title": "Synthetic Toy", "version": "01.02"}, open(os.path.join(patched, "game.json"), "w"))
     env = dict(os.environ, ATIV_DUMP=lib, ATIV_PACKS=packs, PYTHONUTF8="1")
     vr = [sys.executable, os.path.join(ROOT, "pipeline", "vitarecomp.py")]
     r = subprocess.run(vr + ["pack-init", "PCSZ99999"], env=env, capture_output=True, text=True)

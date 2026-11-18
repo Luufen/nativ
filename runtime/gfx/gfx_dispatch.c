@@ -139,7 +139,7 @@ static const GfxTarget *transient_depth(const GfxTarget *t, GfxTarget *out) {
 void gfx_begin_scene(const GfxTarget *t) {
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
 	GfxTarget dims, tdepth;
-	LOCKED(gfxcap_scene(t); gfxcov_scene(t); t = scene_dims(t, &dims); t = transient_depth(t, &tdepth); scene_target = *t; if (gpu_backend()) gfx_gpu_begin_scene(t); else gfx_soft_begin_scene(t));
+	LOCKED(gfxcap_target_scene(t); gfxcap_scene(t); gfxcov_scene(t); t = scene_dims(t, &dims); t = transient_depth(t, &tdepth); scene_target = *t; if (gpu_backend()) gfx_gpu_begin_scene(t); else gfx_soft_begin_scene(t));
 	if (m) { metrics_add_render(now_us() - t0); metrics_add_scene(); }
 }
 static uint64_t presented;   /* frames presented so far (point_draw_seen's log line) */
