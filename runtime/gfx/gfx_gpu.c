@@ -103,8 +103,8 @@ int gfx_gpu_overlay_costs(uint32_t *builds, uint32_t *uploads, uint32_t *skipped
 static SDL_GPUBuffer *vring; static SDL_GPUTransferBuffer *vring_xfer; static uint32_t vring_pos;   /* in words */
 #define IRING_WORDS (4u << 20)    /* the index ring: 16 MB of 32-bit indices */
 static SDL_GPUBuffer *iring; static SDL_GPUTransferBuffer *iring_xfer; static uint32_t iring_pos;
-/* the LDST window ring: the 64 KB guest-memory windows a vertex program's LDSTs read through (storage buffer 1,
- * usse_spirv.h's USSE_LDST_WINDOW), placed at any word offset (the draw's window table carries it). It replaced a
+/* the LDST window ring: the 64 KB guest-memory windows a vertex or fragment program's LDSTs read through
+ * (usse_spirv.h's USSE_LDST_WINDOW), placed at any word offset (the draw's window table carries it). It replaced a
  * GPU buffer and a transfer buffer created, filled and released for every such draw: free on Metal, 8 ms of
  * Uncharted's render thread a frame on Vulkan (an RTX 5070 Ti at 42-46 fps, CPU-bound) */
 #define WRING_WORDS (8u << 20)    /* 32 MB: 512 windows, a few frames' worth after reuse */
@@ -192,7 +192,7 @@ extern void window_present(uint32_t base, uint32_t w, uint32_t h, uint32_t pitch
  * fixes this regardless of which resources a given program happens to use. */
 static int hitch_log(void);
 static uint64_t us_now(void);
-static void *spirv_cross_to_msl(const uint32_t *words, uint32_t nwords, int is_fragment, int nsmp, int nsbuf, int nub, size_t *out_len) {   /* nub: uniform buffers (2: a motion variant's, usse_spirv_set_motion) */   /* nsbuf: vertex storage buffers (PA input, LDST windows) */
+static void *spirv_cross_to_msl(const uint32_t *words, uint32_t nwords, int is_fragment, int nsmp, int nsbuf, int nub, size_t *out_len) {   /* nub: uniform buffers (2: a motion variant's, usse_spirv_set_motion) */   /* nsbuf: storage buffers (vertex PA input/LDST windows, or fragment LDST windows) */
 	uint64_t tq0 = us_now();
 	spvc_context ctx; spvc_context_create(&ctx);
 	spvc_parsed_ir ir;
@@ -220,9 +220,9 @@ static void *spirv_cross_to_msl(const uint32_t *words, uint32_t nwords, int is_f
 		spvc_msl_resource_binding_2 b; spvc_msl_resource_binding_init_2(&b);
 		b.stage = stage; b.desc_set = 1; b.binding = 1; b.count = 1; b.msl_buffer = 1;
 		spvc_compiler_msl_add_resource_binding_2(comp, &b); }
-	for (int k = 0; !is_fragment && k < nsbuf; k++) {   /* vertex storage buffers: set 0, binding nsmp+k (after its textures) -> MSL buffer 1+k (right after the uniform buffer): the PA input, then the LDST windows */
+	for (int k = 0; k < nsbuf; k++) {   /* storage buffers: their stage's sampled-resource set, after its textures -> MSL buffers immediately after the uniform buffers */
 		spvc_msl_resource_binding_2 b; spvc_msl_resource_binding_init_2(&b);
-		b.stage = stage; b.desc_set = 0; b.binding = (unsigned)(nsmp + k); b.count = 1; b.msl_buffer = (unsigned)(nub + k);
+		b.stage = stage; b.desc_set = is_fragment ? 2 : 0; b.binding = (unsigned)(nsmp + k); b.count = 1; b.msl_buffer = (unsigned)(nub + k);
 		spvc_compiler_msl_add_resource_binding_2(comp, &b);
 	}
 	for (int i = 0; i < nsmp; i++) {   /* sampled textures: set 2 (vertex: 0), binding i -> MSL texture/sampler i (a fetch-mode-2 module's input attachment is not a resource: no binding) */
@@ -427,8 +427,8 @@ static SDL_GPUTextureFormat depth_format(void) {
 static uint32_t index_at(const GfxDraw *d, uint32_t i) { return d->index_format ? RD32(d->indices + 4 * i) : RD16(d->indices + 2 * i); }
 
 /* ---------------------------------------------------------------- shader modules, per translated program */
-typedef struct { uint32_t addr, hash, hash2; int kind; uint32_t cube_mask, snap_mask; int pa_words; SDL_GPUShader *shader;   /* hash: the program's content; hash2: the vertex program's for a fragment shader (its varyings) */ int ok, pending; int smp_units[16]; int nsmp; int fetch; int ldst_sa[8], nldst;
-	uint32_t layout_hash; int pcf_unit, pcf, points, fzero, motion; int hnext; int low, prebuilt; uint64_t spv_hash, rid; int warm, wrefs, pred; uint64_t wkey; uint64_t lib_key; int on_disk; } ShaderEntry;   /* lib_key: its MSL cache file's, while that has no library yet (its first pipeline keeps one: mtl_archive.m); on_disk: that file is kept (not a predicted shader's) */   /* warm: a warm-up build's (outside the table: built, then released once wrefs reaches 0), wkey its key in warm.txt; low: queued behind every build a draw waits for (a shader recipe's prebuild; cleared when a draw wants it: bq_promote); prebuilt: made from a recipe, no draw has used it yet; spv_hash: its module's words (RECOMP_SHADER_RECIPES_VERIFY); rid: its recipe's id (0 none) */   /* pending: a build worker is compiling shader (gpu_async); shader and ok are final once it reads 0 */   /* fzero: a FRAGCOLOR program's blend-unit variant, its usse_fragment_fb_blend class (usse_spirv_set_fetch_zero; fetch 3 or 4), 0 none */   /* points: the point-sprite variant (usse_spirv_set_points) */   /* pcf: the filtered-shadow taps the module was built with (shadow_filter), on pcf_unit */   /* layout_hash: a vertex program's fetch plan (vf_plan: the draw's attribute layout the module decodes itself), 0 for the PA-record variant and for fragment programs */   /* ldst_sa: SA words holding the guest pointers the vertex program's LDSTs read through (SpirvModule.ldst_sa) */   /* fetch: SpirvModule.frag_fetch -- 1 samples the framebuffer copy at binding nsmp, 2 reads it as a framebuffer-fetch input */   /* kind: the colour target's, for fragment programs (-1 vertex); cube_mask: which units are cube maps (baked into the module) */
+typedef struct { uint32_t addr, hash, hash2; int kind; uint32_t cube_mask, snap_mask; int pa_words; SDL_GPUShader *shader;   /* hash: the program's content; hash2: the vertex program's for a fragment shader (its varyings) */ int ok, pending; int smp_units[16]; int nsmp; int fetch; int ldst_sa[8], nldst, frag_ldst_storage;
+	uint32_t layout_hash; int pcf_unit, pcf, points, fzero, motion; int hnext; int low, prebuilt; uint64_t spv_hash, rid; int warm, wrefs, pred; uint64_t wkey; uint64_t lib_key; int on_disk; 	} ShaderEntry;   /* lib_key: its MSL cache file's, while that has no library yet (its first pipeline keeps one: mtl_archive.m); on_disk: that file is kept (not a predicted shader's) */   /* warm: a warm-up build's (outside the table: built, then released once wrefs reaches 0), wkey its key in warm.txt; low: queued behind every build a draw waits for (a shader recipe's prebuild; cleared when a draw wants it: bq_promote); prebuilt: made from a recipe, no draw has used it yet; spv_hash: its module's words (RECOMP_SHADER_RECIPES_VERIFY); rid: its recipe's id (0 none) */   /* pending: a build worker is compiling shader (gpu_async); shader and ok are final once it reads 0 */   /* fzero: a FRAGCOLOR program's blend-unit variant, its usse_fragment_fb_blend class (usse_spirv_set_fetch_zero; fetch 3 or 4), 0 none */   /* points: the point-sprite variant (usse_spirv_set_points) */   /* pcf: the filtered-shadow taps the module was built with (shadow_filter), on pcf_unit */   /* layout_hash: a vertex program's fetch plan (vf_plan: the draw's attribute layout the module decodes itself), 0 for the PA-record variant and for fragment programs */   /* ldst_sa: SA words holding the guest pointers the program's LDSTs read through (SpirvModule.ldst_sa) */   /* fetch: SpirvModule.frag_fetch -- 1 samples the framebuffer copy at binding nsmp, 2 reads it as a framebuffer-fetch input */   /* kind: the colour target's, for fragment programs (-1 vertex); cube_mask: which units are cube maps (baked into the module) */
 /* the shader table: never evicted (pipelines point at their shaders); looked up through a hash of the program's content
  * hash and its vertex program's -- a linear search over a long session's ~1500 variants ran for every draw. 2048 entries
  * filled in a 10-minute Killzone session with render-scale changes (each scale adds snap variants) */
@@ -503,7 +503,7 @@ static SDL_GPUShader *make_shader(SpirvModule *m, int is_fragment, int nsmp, int
 	ci.code = code; ci.code_size = code_size; ci.entrypoint = entry; ci.format = fmt;
 	ci.stage = is_fragment ? SDL_GPU_SHADERSTAGE_FRAGMENT : SDL_GPU_SHADERSTAGE_VERTEX;
 	ci.num_samplers = !flat ? (uint32_t)nsmp : 0;   /* (a vertex program's own textures too: usse_spirv.c's vertex SMP) */
-	ci.num_storage_buffers = (!is_fragment && !flat) ? (uint32_t)nsbuf : 0;
+	ci.num_storage_buffers = !flat ? (uint32_t)nsbuf : 0;
 	ci.num_uniform_buffers = flat ? 0 : m->motion ? 2 : 1;   /* SA, both stages (and a motion variant's previous-frame SA) */
 	uint64_t tc0 = us_now();
 	SDL_GPUShader *sh = SDL_CreateGPUShader(gpu(), &ci);
@@ -980,10 +980,10 @@ static int shader_translate(ShaderEntry *e, const UsseProgram *prog, const UsseV
 		           FILE *f = fopen(path, "wb"); if (f) { fwrite(m.words, 4, m.nwords, f); fclose(f); } }
 	}
 	int is_frag = usse_is_fragment(prog);
-	e->fetch = m.frag_fetch; e->nldst = m.nldst_sa; e->pa_words = m.pa_words; memcpy(e->ldst_sa, m.ldst_sa, sizeof e->ldst_sa);
+	e->fetch = m.frag_fetch; e->nldst = m.nldst_sa; e->frag_ldst_storage = m.frag_ldst_storage; e->pa_words = m.pa_words; memcpy(e->ldst_sa, m.ldst_sa, sizeof e->ldst_sa);
 	e->nsmp = nsmp; memcpy(e->smp_units, smp_units, sizeof smp_units);
 	e->spv_hash = hash_bytes(m.words, 4 * (size_t)m.nwords);
-	*sj = (ShaderJob){ e, m, is_frag, nsmp + (m.frag_fetch == 1) + (is_frag ? m.nldst_sa : 0), is_frag ? 0 : (m.nldst_sa || vs_layout_uniform() ? 2 : 1), e->addr, tb0, tb1 - tb0, 0 };   /* the framebuffer copy is one more sampler, and a fragment program's LDST targets (usse_spirv.c's emit_ldst_target); a framebuffer-fetch input is none */
+	*sj = (ShaderJob){ e, m, is_frag, nsmp + (m.frag_fetch == 1) + (is_frag && !m.frag_ldst_storage ? m.nldst_sa : 0), is_frag ? (m.nldst_sa ? 1 : 0) : (m.nldst_sa || vs_layout_uniform() ? 2 : 1), e->addr, tb0, tb1 - tb0, 0 };   /* the framebuffer copy is one more sampler, and a fragment program's target-backed LDST windows are sampled images; a framebuffer-fetch input is none */
 	{ const uint64_t w[4] = { e->spv_hash, (uint64_t)sj->is_frag, (uint64_t)sj->nsmp, (uint64_t)sj->nsbuf }; e->wkey = hash_bytes(w, sizeof w); }   /* (its key in the shader recipes' warm.txt: the MSL cache's -- the module and its bindings) */
 	return 1;
 }
@@ -1927,6 +1927,11 @@ static int trace_sync(void) {   /* RECOMP_GPU_TRACE_SYNC=1: every sync, flush an
 	if (v < 0) { const char *e = getenv("RECOMP_GPU_TRACE_SYNC"); v = e != 0; if (e && strchr(e, '-')) { lo = strtoull(e, 0, 10); hi = strtoull(strchr(e, '-') + 1, 0, 10); } }
 	return v && gpu_frame_no >= lo && gpu_frame_no <= hi;
 }
+static uint32_t trace_addr(void) {
+	static uint32_t a = 0xffffffffu;
+	if (a == 0xffffffffu) { const char *e = getenv("RECOMP_GPU_TRACE_ADDR"); a = e ? (uint32_t)strtoul(e, 0, 16) : 0; }
+	return a;
+}
 /* its GPU objects. Only the depth texture it made itself: `depth` may be a texture the depth table
  * owns -- or owned, and has since released (a surface evicted from the table while a target still
  * pointed at it). Asking the table whether it is "shared" released such a texture a second time
@@ -2054,6 +2059,7 @@ static void texels_to_floats(int kind, const uint8_t *in, float *out, uint32_t n
 static TargetEntry *scene_entry;   /* the current scene's colour target (see gfx_gpu_begin_scene) */
 static int scene_open;             /* between gfx_gpu_begin_scene and gfx_gpu_end_scene (scene_entry stays set after: the last scene's) */
 static pthread_t scene_thread;      /* the thread that began it */
+static int scene_trace_addr, scene_trace_draw;
 static SDL_GPUTexture *target_lo(TargetEntry *e) {   /* render scale > 1: the 1x copy of e's texture guest-memory syncs go through */
 	if (!e->lo) {
 		SDL_GPUTextureCreateInfo ci = { .type = SDL_GPU_TEXTURETYPE_2D, .format = kind_format(e->kind), .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
@@ -3296,6 +3302,7 @@ void gfx_gpu_frame_queued(void) {
 }
 void gfx_gpu_begin_scene(const GfxTarget *t) {
 	scene_open = 1; scene_thread = pthread_self();
+	scene_trace_addr = scene_trace_draw = 0;
 	gfx_soft_use_interp();   /* the CPU fallback and check reference run the real shaders */
 	render_scale_init();
 	/* a requested render scale (F2) applies here, between scenes: present comes from the display
@@ -3315,6 +3322,13 @@ void gfx_gpu_begin_scene(const GfxTarget *t) {
 	batch_flush("scene begun without an end");   /* normally empty: gfx_gpu_end_scene flushed (targets and depth surfaces may be evicted below) */
 	vis_complete(0);   /* visibility counters the GPU has finished: into guest memory */
 	scene_target = *t;
+	{
+		const uint32_t a = trace_addr();
+		const uint64_t end = (uint64_t)t->data + (uint64_t)gfx_target_bpp(t) * t->stride * t->height;
+		scene_trace_addr = a && t->data && t->data <= a && a < end;
+		if (scene_trace_addr) fprintf(stderr, "gpu trace addr: frame %llu begins target %#x fmt %#x %ux%u stride %u over %#x\n",
+			(unsigned long long)gpu_frame_no, t->data, t->format, t->width, t->height, t->stride, a);
+	}
 	scene_hud = hud_scene(t->data); scene_disp_draws = 0;
 	static int no_depth_only = -1; if (no_depth_only < 0) no_depth_only = getenv("RECOMP_GPU_NO_DEPTH_ONLY") != 0;   /* RECOMP_GPU_NO_DEPTH_ONLY=1: depth-only scenes on the software path, as before */
 	scene_entry = t->data ? get_target(t) : t->depth && t->ds_data && t->width && !no_depth_only ? scratch_target(t) : 0;
@@ -3959,12 +3973,13 @@ static int no_views(void) { static int v = -1; if (v < 0) v = getenv("RECOMP_GPU
 static int view_mode(uint32_t tgt_fmt, int tgt_kind, const GfxTexture *tex, uint32_t *tex_bpp, uint32_t swz[4]) {
 	uint32_t tb = tgt_fmt & 0xF1800000u, xb = tex->format & 0xff000000u, sw = (tex->format >> 12) & 7;
 	*tex_bpp = 4;
-	/* gfx_soft.c's apply_swizzle, as component selectors: four-component formats permute, one-component
-	 * formats (U8) place the one value; the HDR packed formats take none */
+	/* gfx_soft.c's apply_swizzle, as component selectors: four-component formats permute, three-component
+	 * formats may swap R/B, and one-component formats (U8) place the one value */
 	static const uint8_t sw4[8][4] = { {0,1,2,3}, {2,1,0,3}, {3,2,1,0}, {1,2,3,0}, {0,1,2,5}, {2,1,0,5}, {3,2,1,5}, {1,2,3,5} };
+	static const uint8_t sw3[2][4] = { {0,1,2,5}, {2,1,0,5} };
 	static const uint8_t sw1[8][4] = { {0,4,4,5}, {0,4,4,4}, {0,5,5,5}, {0,0,0,0}, {0,0,0,4}, {0,0,0,5}, {4,4,4,0}, {5,5,5,0} };
-	int ncomp = xb == 0x0c000000u || xb == 0x0d000000u || xb == 0x1b000000u || xb == 0x0e000000u ? 4 : xb == 0x00000000u || xb == 0x12000000u || xb == 0x13000000u ? 1 : 0;
-	for (int k = 0; k < 4; k++) swz[k] = ncomp == 4 ? sw4[sw][k] : ncomp == 1 ? sw1[sw][k] : (uint32_t)k;
+	int ncomp = xb == 0x0c000000u || xb == 0x0d000000u || xb == 0x1b000000u || xb == 0x0e000000u ? 4 : xb == 0x19000000u ? 3 : xb == 0x00000000u || xb == 0x12000000u || xb == 0x13000000u ? 1 : 0;
+	for (int k = 0; k < 4; k++) swz[k] = ncomp == 4 ? sw4[sw][k] : ncomp == 3 ? sw3[sw & 1][k] : ncomp == 1 ? sw1[sw][k] : (uint32_t)k;
 	if (tb == 0x01000000u && tgt_kind != TK_F16RAW) {
 		static const uint8_t inv_order[4][4] = { {0,1,2,3}, {2,1,0,3}, {3,2,1,0}, {3,0,1,2} };
 		uint32_t order = (tgt_fmt >> 20) & 3;
@@ -3985,6 +4000,10 @@ static int view_mode(uint32_t tgt_fmt, int tgt_kind, const GfxTexture *tex, uint
 		if (tgt_kind == TK_F16RAW) return xb == 0x0c000000u ? 9 : xb == 0x0d000000u ? 10 : -1; /* exact packed halves as U8U8U8U8 / S8S8S8S8 */
 		*tex_bpp = 8; return xb == 0x1b000000u ? 0 : -1;                                      /* F16F16F16F16 as F16F16F16F16 */
 	case 0x21000000u: return xb == 0x1a000000u ? 1 : -1;                                        /* F11F11F10 as F11F11F10 */
+	case 0x31000000u:
+		if (xb != 0x19000000u) return -1;                                                        /* SE5M9M9M9 as SE5M9M9M9 */
+		if (((tgt_fmt >> 20) & 3) == 1) { uint32_t z = swz[0]; swz[0] = swz[2]; swz[2] = z; }    /* compose the target and texture RGB/BGR orders */
+		return 0;
 	case 0x41000000u: return xb == 0x9a000000u ? 2 : -1;                                        /* U2F10F10F10 as U2F10F10F10 */
 	case 0x11000000u: return xb == 0x0c000000u ? 3 : xb == 0x0d000000u ? 4 : -1;                /* F32F32 as U8U8U8U8 / S8S8S8S8 bytes */
 	case 0x00000000u: return xb == 0x0c000000u && view_swz_u8x4(tgt_fmt, swz) ? 0 : -1;       /* U8U8U8U8 as U8U8U8U8 (a sub-rectangle; the exact case binds the target
@@ -4327,7 +4346,7 @@ typedef struct {
 	SDL_GPUViewport vp; SDL_Rect sc;
 	uint32_t vring_off, vbytes, iring_off, nidx, first_vertex;   /* this draw's region of each ring (bytes) */
 	uint32_t ibytes; int isize;   /* its index ring region's size (a multiple of 4) and the index element size (2 or 4; the GPU-side fetch draws the game's 16-bit indices as they are) */
-	int wring;   /* binds the LDST window ring as storage buffer 1 (its windows: placed when the draw is recorded) */
+	int wring, fwring;   /* binds the LDST window ring in the vertex/fragment stage (its windows: placed when the draw is recorded) */
 	SDL_GPUTextureSamplerBinding tsb[25];   /* the program's samplers (16), the framebuffer copy, the fragment LDST targets (8) */
 	SDL_GPUTextureSamplerBinding vtsb[16]; int nvtsb;   /* the vertex program's textures (GfxDraw.vtex) */
 	UsseDrawUniforms vu, fu;
@@ -4673,7 +4692,7 @@ static void batch_flush_body(const char *why) {
 			/* the dynamic state between draws of the pass, set only when it changes (uniform data pushed
 			 * stays bound for the later draws of the command buffer, across pipeline binds -- but a view
 			 * pass in between pushes its own, so every pass starts from nothing) */
-			PipeEntry *lpipe = 0; const BatchDraw *last = 0; int ibound = 0;
+			PipeEntry *lpipe = 0; const BatchDraw *last = 0; SDL_GPUBuffer *last_fbuf = 0; int ibound = 0;
 			for (int i = pos; i < end && !batch.debug_clear; i++) {
 				BatchDraw *b = &batch.d[i];
 				if (!b->pipe->pipe) continue;   /* (gpu_overlap: its pipeline failed to build -- dropped, the state before it still current) */
@@ -4692,7 +4711,8 @@ static void batch_flush_body(const char *why) {
 				if (!last || memcmp(&last->fu, &b->fu, sizeof b->fu)) SDL_PushGPUFragmentUniformData(cmd, 0, &b->fu, sizeof b->fu);
 				if (b->ntsb && (!last || last->ntsb != b->ntsb || memcmp(last->tsb, b->tsb, (size_t)b->ntsb * sizeof b->tsb[0]))) SDL_BindGPUFragmentSamplers(rp, 0, b->tsb, (uint32_t)b->ntsb);
 				if (b->nvtsb && (!last || last->nvtsb != b->nvtsb || memcmp(last->vtsb, b->vtsb, (size_t)b->nvtsb * sizeof b->vtsb[0]))) SDL_BindGPUVertexSamplers(rp, 0, b->vtsb, (uint32_t)b->nvtsb);
-				if (b->qslot >= 0) SDL_BindGPUFragmentStorageBuffers(rp, 0, &qbuf, 1);   /* a visibility query: its counters (the slot is in its uniforms) */
+				SDL_GPUBuffer *fbuf = b->qslot >= 0 ? qbuf : b->fwring ? (wring ? wring : vring) : 0;
+				if (fbuf && fbuf != last_fbuf) { SDL_BindGPUFragmentStorageBuffers(rp, 0, &fbuf, 1); last_fbuf = fbuf; }
 				if (b->indexed) {
 					if (ibound != b->isize) { SDL_GPUBufferBinding ib = { .buffer = iring }; SDL_BindGPUIndexBuffer(rp, &ib, b->isize == 2 ? SDL_GPU_INDEXELEMENTSIZE_16BIT : SDL_GPU_INDEXELEMENTSIZE_32BIT); ibound = b->isize; }   /* the whole ring, rebound when the element size changes: each draw starts at its own first index */
 					SDL_DrawGPUIndexedPrimitives(rp, b->nidx, 1, b->iring_off / (uint32_t)b->isize, (int32_t)b->first_vertex, 0);   /* gl_VertexIndex = index + first_vertex: this draw's records in the ring (the GPU-side fetch: the game's own index, first_vertex 0) */
@@ -5866,6 +5886,8 @@ void gfx_gpu_draw(const GfxDraw *d) {
 	disp_note(DISP_DRAWS);
 	if (ao_scene) ao_note_draw(d);   /* the main scene's camera, for its ambient occlusion */
 	if (d->clip_mode == 0x40000000u) return;   /* SCE_GXM_REGION_CLIP_ALL: nothing drawn (gfx_soft.c's record_tri agrees); scene_first_draw untouched so the next real draw still clears if it's the scene's first */
+	if (scene_trace_addr) fprintf(stderr, "gpu trace addr:   target draw %d v=%#x f=%#x prim=%#x count=%u\n",
+		++scene_trace_draw, d->vprog, d->fprog, d->prim, d->count);
 	/* SCE_GXM_PRIMITIVE_POINTS: point sprites, expanded to quads on the CPU by gfx_soft.c's
 	 * render_points_interp (the pipelines here are triangle lists; a few dozen sprites per prompt).
 	 * Uncharted's swipe prompts draw this way into a widget-sized target (see gfx_soft.c) */
@@ -5999,22 +6021,28 @@ void gfx_gpu_draw(const GfxDraw *d) {
 		if (!gpu_overlap()) build_wait(&pipe->pending);   /* (gpu_overlap: recorded pending, the flush waits) */
 	}
 	if (!pipe || (!pipeline_pending(pipe) && !pipe->pipe)) { soft_fallback(d, "no pipeline"); return; }
-	/* a fragment program's LDST windows (usse_spirv.c's emit_ldst_target): each pointer (+4: the load's own offset) inside
-	 * a GPU colour target -- F16F16F16F16 or 8-bit RGBA, never the scene's own -- whose texture the shader fetches from.
-	 * Killzone's quarter-res pass reads its HDR scene so: through guest memory that was a 4 MB download a frame. */
+	/* A fragment LDST pointer inside a GPU colour target uses that target's sampled-image fast path.
+	 * Any other valid pointer is copied to the common guest-memory window ring below. */
 	TargetEntry *ldst_te[8] = {0}; uint32_t ldst_win[8][4]; memset(ldst_win, 0, sizeof ldst_win);
+	uint32_t ldst_mem[8] = {0}; int nldst_mem = 0;
 	for (int k = 0; k < fs->nldst && k < 8; k++) {
-		uint32_t ptr = fdraw.sa[fs->ldst_sa[k] & 255].u + 4; TargetEntry *te = 0; uint32_t bpp = 0;
+		uint32_t base = fdraw.sa[fs->ldst_sa[k] & 255].u, ptr = base + 4; TargetEntry *te = 0; uint32_t bpp = 0;
 		for (int ti = 0; ti < ntargets; ti++) {
 			TargetEntry *x = &targets[ti]; if (!x->color || (x->kind != TK_F16 && x->kind != TK_U8)) continue;
 			GfxTarget tg = target_entry_as_gfx(x); uint32_t b = (uint32_t)gfx_target_bpp(&tg);
 			if (ptr >= x->addr && ptr < x->addr + b * x->width * x->height && (!te || x->gen > te->gen)) { te = x; bpp = b; }
 		}
-		if (!te || te == scene_entry || !((te->kind == TK_F16 && bpp == 8) || (te->kind == TK_U8 && bpp == 4))) { soft_fallback(d, "fragment LDST outside a GPU colour target"); return; }
-		ldst_te[k] = te;
-		ldst_win[k][0] = te->addr; ldst_win[k][1] = bpp * te->width * te->height; ldst_win[k][2] = bpp * te->width; ldst_win[k][3] = (te->kind == TK_F16 ? 1u : 0u) | bpp << 8;
+		if (!fs->frag_ldst_storage && te && te != scene_entry && ((te->kind == TK_F16 && bpp == 8) || (te->kind == TK_U8 && bpp == 4))) {
+			ldst_te[k] = te;
+			ldst_win[k][0] = te->addr; ldst_win[k][1] = bpp * te->width * te->height; ldst_win[k][2] = bpp * te->width; ldst_win[k][3] = (te->kind == TK_F16 ? 1u : 0u) | bpp << 8;
+		} else {
+			if (!base || base > 0xFFFFFFFFu - USSE_LDST_WINDOW) continue;   /* an unavailable optional window reads zero, as vertex LDST does */
+			if (fs->frag_ldst_storage && te) target_sync_for_cpu(te);   /* storage-only variants need the target's current bytes in guest memory */
+			ldst_mem[k] = base; nldst_mem++;
+			ldst_win[k][0] = base; ldst_win[k][1] = USSE_LDST_WINDOW; ldst_win[k][3] = 0x80000000u;
+		}
 	}
-	for (int k = 0; k < fs->nldst && k < 8; k++) target_sync_for_gpu(ldst_te[k]);   /* (its newest bytes may be in guest memory: a software draw) */
+	for (int k = 0; k < fs->nldst && k < 8; k++) if (ldst_te[k]) target_sync_for_gpu(ldst_te[k]);   /* (its newest bytes may be in guest memory: a software draw) */
 	/* guest memory newer than the scene's target (a software draw; in a replay, a memory record
 	 * restored over it -- ~20 ms of Unit 13's frame 757 replay, which the live game doesn't have) */
 	{ uint64_t ts0 = us_now(), tf1 = t_flush; target_sync_for_gpu(scene_entry); t_scene_sync += us_now() - ts0 - (t_flush - tf1); }
@@ -6141,7 +6169,7 @@ void gfx_gpu_draw(const GfxDraw *d) {
 		win[nwin][0] = b; win[nwin][1] = USSE_LDST_WINDOW; win[nwin][2] = (uint32_t)nwin * (USSE_LDST_WINDOW / 4); win[nwin][3] = 0; nwin++;
 		if (trace_sync()) fprintf(stderr, "gpu trace: draw %u LDST window %d: SA%d = %#x, first words %#x %#x %#x\n", n_gpu_draws, nwin - 1, vs->ldst_sa[k], b, RD32(b), RD32(b + 4), RD32(b + 8));
 	}
-	if (nwin) {   /* each window into the LDST ring (guest memory as it is now: the batch's copy pass uploads it), or the one already there */
+	if (nwin || nldst_mem) {   /* each window into the LDST ring (guest memory as it is now: the batch's copy pass uploads it), or the one already there */
 		if (!wring) {
 			SDL_GPUBufferCreateInfo wci = { .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, .size = WRING_WORDS * 4 };
 			wring = SDL_CreateGPUBuffer(gpu(), &wci);
@@ -6150,8 +6178,8 @@ void gfx_gpu_draw(const GfxDraw *d) {
 			if (!wring || !wring_xfer) { free(check_pre); soft_fallback(d, "no LDST window ring"); return; }
 		}
 		const uint32_t ww = USSE_LDST_WINDOW / 4;
-		if (wring_pos + (uint32_t)(nwin + mv_npwin) * ww > WRING_WORDS) {   /* (an empty batch doesn't flush: its ranges are of windows no recorded draw uses, and the lap change retires them from the reuse cache) */
-			batch_flush("LDST ring wrap"); wring_pos = 0; wring_lap++; bw_lo = bwr_lo = ~0u; bw_hi = bwr_hi = 0; ring_wait_region(2, 0, (uint32_t)(nwin + mv_npwin) * ww, 1);
+		if (wring_pos + (uint32_t)(nwin + nldst_mem + mv_npwin) * ww > WRING_WORDS) {   /* (an empty batch doesn't flush: its ranges are of windows no recorded draw uses, and the lap change retires them from the reuse cache) */
+			batch_flush("LDST ring wrap"); wring_pos = 0; wring_lap++; bw_lo = bwr_lo = ~0u; bw_hi = bwr_hi = 0; ring_wait_region(2, 0, (uint32_t)(nwin + nldst_mem + mv_npwin) * ww, 1);
 		}
 		uint32_t *wmap = 0;
 		for (int k = 0; k < nwin; k++) {
@@ -6165,6 +6193,19 @@ void gfx_gpu_draw(const GfxDraw *d) {
 			}
 			if (off < bwr_lo) bwr_lo = off; if (off + ww > bwr_hi) bwr_hi = off + ww;
 			win[k][2] = off;   /* the window's word offset in storage buffer 1 */
+		}
+		for (int k = 0; k < fs->nldst && k < 8; k++) if (ldst_mem[k]) {
+			uint32_t off = ldst_window_reuse(ldst_mem[k]);
+			if (off == ~0u) {
+				ring_wait_region(2, wring_pos, ww, 0);
+				if (!wmap) wmap = (uint32_t *)SDL_MapGPUTransferBuffer(gpu(), wring_xfer, false);
+				off = wring_pos; wring_pos += ww;
+				ldst_window_placed(ldst_mem[k], off, wmap + off);
+				if (off < bw_lo) bw_lo = off; if (off + ww > bw_hi) bw_hi = off + ww;
+			}
+			if (off < bwr_lo) bwr_lo = off; if (off + ww > bwr_hi) bwr_hi = off + ww;
+			ldst_win[k][2] = off;
+			if (trace_sync()) fprintf(stderr, "gpu trace: draw %u fragment LDST window %d: SA%d = %#x, ring word %#x\n", n_gpu_draws, k, fs->ldst_sa[k], ldst_mem[k], off);
 		}
 		for (int k = 0; k < mv_npwin; k++) {   /* the previous frame's windows (M2), never through the reuse cache: an address's contents of the previous frame */
 			ring_wait_region(2, wring_pos, ww, 0);
@@ -6242,7 +6283,7 @@ void gfx_gpu_draw(const GfxDraw *d) {
 		bind_unit((unit >= 0 && unit < 16) ? &d->vtex[unit] : 0, unit, &vtsb[i], &v_srgb_dec, &v_srgb_enc, &v_scaled, "vprog", d->vprog, i);
 	}
 
-	for (int k = 0; k < fs->nldst && k < 8 && ntsb < 25; k++) { tsb[ntsb].texture = ldst_te[k]->color; tsb[ntsb].sampler = nearest_sampler(); ntsb++; }   /* the LDST targets, after the samplers and the framebuffer copy (emit_ldst_target's bindings) */
+	for (int k = 0; !fs->frag_ldst_storage && k < fs->nldst && k < 8 && ntsb < 25; k++) { tsb[ntsb].texture = ldst_te[k] ? ldst_te[k]->color : dummy_texture(); tsb[ntsb].sampler = nearest_sampler(); ntsb++; }   /* target-backed LDST images, after the samplers and framebuffer copy */
 
 	/* record the draw (see "the draw batch"): binding its textures above may have flushed the draws
 	 * before it (a re-upload) or put a view pass after them; a FRAGCOLOR draw gets its framebuffer
@@ -6296,7 +6337,7 @@ void gfx_gpu_draw(const GfxDraw *d) {
 	if (mv_jit_scene && !b->hud) { b->vp.x += mv_jx; b->vp.y += mv_jy; mv_jit_draws++; }   /* (M3 jitter: the motion pass draws with the same viewport, its depth test agrees) */
 	else if (!b->hud && composite_mesh(d, pipe)) { float jx, jy; mv_jitter(mv_qframe, &jx, &jy); b->vp.x += jx; b->vp.y += jy; mv_jit_draws++; }
 	b->vring_off = vring_off; b->vbytes = vbytes; b->iring_off = iring_off; b->nidx = nverts; b->first_vertex = first_vertex; b->isize = isize; b->ibytes = 4 * iwords;
-	b->wring = nwin > 0;
+	b->wring = nwin > 0; b->fwring = fs->nldst > 0;
 	memcpy(b->tsb, tsb, (size_t)ntsb * sizeof tsb[0]);
 	b->nvtsb = vs->nsmp < 16 ? vs->nsmp : 16; memcpy(b->vtsb, vtsb, (size_t)b->nvtsb * sizeof vtsb[0]);
 	{	/* the SA words plus the viewport z mapping (see emit_vert_epilogue); the fragment stage's block has the same shape */

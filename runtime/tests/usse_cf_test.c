@@ -20,7 +20,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/mman.h>
+#endif
 #include "usse.h"
 #include "usse_internal.h"
 #include "usse_spirv.h"
@@ -126,15 +130,26 @@ static void case_refused(const char *name, const uint64_t *w, int n) {
 }
 
 int main(void) {
+#ifdef _WIN32
+	recomp_mem = VirtualAlloc(0, 512u << 20, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	if (!recomp_mem) { fprintf(stderr, "VirtualAlloc failed\n"); return 2; }
+#else
 	recomp_mem = mmap(0, 1ull << 32, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
 	if (recomp_mem == MAP_FAILED) { perror("mmap"); return 2; }
+#endif
 
 	/* the old form still: (p0) BR +3 skips 1-2 */
 	const uint64_t skip[] = { br(P0, 3), NOP, NOP, NOP };
 	case_ok("skip", skip, 4, 1, 0, 1);
+	/* +1 names the ordinary next instruction, so conditional and unconditional forms are no-ops */
+	const uint64_t fallthrough[] = { br(P_NONE, 1), br(P0, 1), NOP };
+	case_ok("branch to fall-through", fallthrough, 3, 1, 0, 0);
 	/* if/else: (p0) BR +3 -> 3 (then = 1..2, its last instruction BR +3 -> 5 jumps over the else part 3..4) */
 	const uint64_t ifelse[] = { br(P0, 3), NOP, br(P_NONE, 3), NOP, NOP, NOP };
 	case_ok("if/else", ifelse, 6, 1, 0, 1);
+	/* three-way ladder: the nested if/else's closing jump at 9 is also the outer then's closing jump */
+	const uint64_t ladder[] = { br(P0, 10), NOP, br(P1, 6), NOP, NOP, NOP, NOP, br(P_NONE, 4), NOP, br(P_NONE, 2), NOP, NOP };
+	case_ok("three-way if ladder", ladder, 12, 1, 0, 2);
 	/* a while loop: header 0, (p0) BR +4 -> 5 = past the back edge (break), back edge 4: BR -4 -> 0 */
 	const uint64_t loop[] = { NOP, br(P0, 4), NOP, NOP, br(P_NONE, -4), NOP };
 	case_ok("loop + break", loop, 6, 1, 1, 1);

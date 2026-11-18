@@ -49,6 +49,7 @@ enum {
 	SpvOpLogicalOr = 166, SpvOpLogicalAnd = 167, SpvOpLogicalNot = 168, SpvOpBitwiseXor = 198, SpvOpINotEqualB = 171,
 	SpvOpSLessThan = 177, SpvOpSLessThanEqual = 179, SpvOpSGreaterThanEqual = 175,
 	SpvOpBranch = 249, SpvOpBranchConditional = 250, SpvOpSelectionMerge = 247, SpvOpLoopMerge = 246,
+	SpvOpPhi = 245, SpvOpSwitch = 251,
 	SpvOpSNegate = 126, SpvOpShiftRightArithmetic = 195, SpvOpNot = 200, SpvOpBitFieldSExtract = 202,
 	SpvOpULessThan = 176, SpvOpUGreaterThan = 172, SpvOpUMod = 137,
 	SpvOpImage = 100, SpvOpImageFetch = 95, SpvOpImageGather = 96, SpvOpImageQuerySizeLod = 103, SpvOpDPdx = 207, SpvOpDPdy = 208,
@@ -200,8 +201,11 @@ typedef struct {
 	/* FRAGCOLOR_USED: gl_FragCoord, the framebuffer copy's sampled image, the 2D image type */
 	uint32_t var_frag_depth;              /* fragment: Output float FragDepth, if used */
 	int uses_depth;
-	uint32_t var_win; int nwin; int win_sa[8];   /* vertex LDST: storage buffer 1 holds nwin windows of guest memory, one per SA pointer word (see ldst_pointer_sa) */
+	uint32_t var_win; int nwin; int win_sa[8];   /* LDST: a storage buffer holds nwin windows of guest memory, one per SA pointer word (see ldst_pointer_sa) */
+	int ldst_storage_only;                        /* fragment: omit target images when the combined sampled-resource count exceeds 16 */
 	uint32_t ldst_img[8];                        /* fragment LDST: window w's render target, a sampled image (emit_ldst_target) */
+	const UsseProgram *prog;
+	uint32_t var_thread, thread_words;            /* container 18: per-invocation Private memory */
 	uint32_t var_vin, ptr_vin_u, vindex;   /* vertex: PA input SSBO, its element-pointer type, loaded (uint) gl_VertexIndex */
 	int motion, pos_only; uint32_t var_sa_prev, var_mv_cur, var_mv_prev;   /* usse_spirv_set_motion: the previous frame's SA block, the two positions'
 	                                                                        * outputs; pos_only: the epilogue writes only the position, to var_mv_prev */
@@ -1190,11 +1194,13 @@ static int resolve_smp_unit(const UOp *op, const uint32_t sa_tex_unit[256]) {
 	else return -1;
 	return (unit >= 0 && unit < 16) ? unit : -1;
 }
+static int dynamic_smp_unit(const UOp *op) { return op->s1.bank != BK_IMM && op->s1.bank != BK_SA; }
 void usse_spirv_key(const UsseProgram *prog, const UsseFragLayout *fl, const uint32_t sa_tex_unit[256], int *color_kind, uint32_t *cube_mask, uint32_t *snap_mask) {
 	uint32_t used = 0; int n = 0; const UOp *code = usse_program_code(prog, 0, &n);
 	for (int i = 0; i < n; i++) if (code[i].op == OP_SMP) {   /* (resolve_smp_unit's, without noting the read) */
 		int unit = code[i].s1.bank == BK_IMM ? code[i].s1.num : code[i].s1.bank == BK_SA ? (int)(sa_tex_unit[code[i].s1.num % 256] & 0xFF) : -1;
 		if (unit >= 0 && unit < 16) used |= 1u << unit;
+		else if (dynamic_smp_unit(&code[i])) used = 0xffffu;
 	}
 	if (fl) for (int i = 0; i < fl->niters; i++) if (fl->iters[i].is_tex && fl->iters[i].tex_unit >= 0 && fl->iters[i].tex_unit < 16) used |= 1u << fl->iters[i].tex_unit;
 	if (cube_mask) *cube_mask &= used;
@@ -1283,10 +1289,97 @@ static uint32_t cube_coord(Gen *g, uint32_t u, uint32_t v, uint32_t w3, uint32_t
 	return result3(s, &s->func, SpvOpCompositeConstruct, t_vec(s, tf, 3), su, sv, face);
 }
 static uint32_t sample_lod(Gen *g, int slot, int unit, uint32_t coord, int lod_mode, uint32_t lodv, const uint32_t *grad);   /* (below, with srgb_fixup) */
+static uint32_t sample_smp_dynamic_case(Gen *g, int slot, int unit, uint32_t u, uint32_t v, uint32_t cube_coord_id,
+                                        int lod_mode, uint32_t lodv, const uint32_t grad[2]) {
+	Spv *s = &g->s;
+	uint32_t coord = cube_coord_id;
+	if (!coord) {
+		if (unit == g->pcf_unit && g->pcf_du) { u = fop2(s, SpvOpFAdd, u, g->pcf_du); v = fop2(s, SpvOpFAdd, v, g->pcf_dv); }
+		coord = result2(s, &s->func, SpvOpCompositeConstruct, t_vec(s, t_float(s), 2), u, v);
+	}
+	uint32_t texel = !cube_coord_id && g->is_fragment && (g->snap_mask >> (unit & 15) & 1) ? snap_fetch(g, slot, unit, u, v)
+	                                                                                       : sample_lod(g, slot, unit, coord, lod_mode, lodv, grad);
+	return srgb_fixup(g, unit, texel);
+}
+/* A texture-buffer SMP reads its unit from a register at shader run time. SDL_GPU exposes the
+ * Vita's units as separate bindings rather than a descriptor array, so select them with structured
+ * control flow: every case has a statically named sampler, while only the selected case executes a
+ * texture read. For implicit LOD, coordinate derivatives are computed before that non-uniform
+ * switch and each case uses an explicit gradient sample. */
+static uint32_t sample_smp_dynamic(Gen *g, const UOp *op, uint32_t u, uint32_t v, uint32_t w3, uint32_t lodv, int *ok) {
+	Spv *s = &g->s;
+	if (op->args[0] != 0 || (op->sub != 1 && op->sub != 2) || op->sub2 == 3) {
+		if (!g->why[0]) snprintf(g->why, sizeof g->why, "SMP: dynamic texture unit needs 2D/cube normal sampling without explicit gradients (dim %u, lod %u, sb %d)",
+		                         op->sub, op->sub2, op->args[0]);
+		*ok = 0; return 0;
+	}
+	int cube = op->sub == 2;
+	int slots[16], n = 0;
+	for (int i = 0; i < g->nsmp; i++) if (slot_is_cube(g, i) == cube) slots[n++] = i;
+	if (!n) {
+		if (!g->why[0]) snprintf(g->why, sizeof g->why, "SMP: dynamic texture unit has no %s sampler slots", cube ? "cube" : "2D");
+		*ok = 0; return 0;
+	}
+	uint32_t selector = uop2(s, SpvOpBitwiseAnd, read_raw_comp(g, &op->s1, 0, 0, ok), c_uint(s, 0xff));
+	if (!*ok) return 0;
+	uint32_t grad[2] = {0, 0}, coord = 0;
+	if (cube) coord = cube_coord(g, u, v, w3, grad);
+	else if (g->is_fragment && op->sub2 != 2) {
+		uint32_t tf = t_float(s), tv2 = t_vec(s, tf, 2);
+		grad[0] = result2(s, &s->func, SpvOpCompositeConstruct, tv2, result1(s, &s->func, SpvOpDPdx, tf, u), result1(s, &s->func, SpvOpDPdx, tf, v));
+		grad[1] = result2(s, &s->func, SpvOpCompositeConstruct, tv2, result1(s, &s->func, SpvOpDPdy, tf, u), result1(s, &s->func, SpvOpDPdy, tf, v));
+	}
+	uint32_t merge = nid(s), fallback = nid(s), labels[16], values[16];
+	for (int i = 0; i < n; i++) labels[i] = nid(s);
+	uint32_t sw[2 + 2 * 16]; int nw = 0;
+	sw[nw++] = selector; sw[nw++] = fallback;
+	for (int i = 0; i < n; i++) { sw[nw++] = (uint32_t)g->smp_units[slots[i]]; sw[nw++] = labels[i]; }
+	INS(&s->func, SpvOpSelectionMerge, merge, 0 /*None*/);
+	ins(&s->func, SpvOpSwitch, nw, sw);
+	for (int i = 0; i < n; i++) {
+		int slot = slots[i], unit = g->smp_units[slot];
+		INS(&s->func, SpvOpLabel, labels[i]);
+		values[i] = sample_smp_dynamic_case(g, slot, unit, u, v, coord, op->sub2, lodv, grad);
+		INS(&s->func, SpvOpBranch, merge);
+	}
+	INS(&s->func, SpvOpLabel, fallback);
+	INS(&s->func, SpvOpBranch, merge);
+	INS(&s->func, SpvOpLabel, merge);
+	uint32_t tf = t_float(s), tv4 = t_vec(s, tf, 4), zero = c_float(s, 0), zero4 = nid(s);
+	uint32_t zargs[6] = {tv4, zero4, zero, zero, zero, zero};
+	ins(&s->types, SpvOpConstantComposite, 6, zargs);
+	uint32_t result = nid(s), phi[2 + 2 * 17]; int np = 0;
+	phi[np++] = tv4; phi[np++] = result;
+	for (int i = 0; i < n; i++) { phi[np++] = values[i]; phi[np++] = labels[i]; }
+	phi[np++] = zero4; phi[np++] = fallback;
+	ins(&s->func, SpvOpPhi, np, phi);
+	return result;
+}
 static void emit_smp(Gen *g, const UOp *op, const uint32_t sa_tex_unit[256], int *ok) {
 	Spv *s = &g->s;
-	int unit = resolve_smp_unit(op, sa_tex_unit), slot = unit < 0 ? -1 : sampler_slot(g, unit);
-	if (slot < 0) { if (!g->why[0]) snprintf(g->why, sizeof g->why, "SMP: texture unit %d has no sampler slot", unit); *ok = 0; return; }   /* samplers are pre-declared from a prescan before the walk starts */
+	int dynamic = dynamic_smp_unit(op), unit = resolve_smp_unit(op, sa_tex_unit), slot = unit < 0 ? -1 : sampler_slot(g, unit);
+	if (dynamic) {
+		uint32_t u = read_comp_f(g, &op->s0, 0, 0, ok), v = read_comp_f(g, &op->s0, 0, 1, ok);
+		uint32_t w3 = op->sub == 2 ? read_comp_f(g, &op->s0, 0, 2, ok) : 0;
+		uint32_t lodv = (op->sub2 == 1 || op->sub2 == 2) ? read_comp_f(g, &op->s2, 0, 0, ok) : 0;
+		if (!*ok) return;
+		uint32_t texel = sample_smp_dynamic(g, op, u, v, w3, lodv, ok);
+		if (!*ok) return;
+		int f16 = (op->sub3 == 2);
+		for (int c = 0; c < 4; c++) if (op->mask & (1 << c)) {
+			uint32_t id = composite_extract1(s, t_float(s), texel, (uint32_t)c);
+			if (f16) write_comp_f16(g, &op->dst, 0, c, id, ok); else write_comp_f(g, &op->dst, 0, c, id, ok);
+		}
+		return;
+	}
+	if (slot < 0) {
+		if (!g->why[0]) {
+			uint32_t value = op->s1.bank == BK_SA ? sa_tex_unit[op->s1.num % 256] : 0;
+			snprintf(g->why, sizeof g->why, "SMP: sampler operand bank %u word %u (value %#x) resolves to texture unit %d with no sampler slot",
+			         op->s1.bank, op->s1.num, value, unit);
+		}
+		*ok = 0; return;   /* samplers are pre-declared from a prescan before the walk starts */
+	}
 	uint32_t u = read_comp_f(g, &op->s0, 0, 0, ok), v = read_comp_f(g, &op->s0, 0, 1, ok);
 	if (!*ok) return;
 	uint32_t coord, grad[2] = {0, 0};
@@ -1376,6 +1469,96 @@ static int ldst_pointer_sa(const UOp *code, int i) {
 		return -1;
 	}
 	return -1;
+}
+static int ldst_thread_info(Gen *g, const UOp *code, int i, int *sa_out, uint32_t *words_out) {
+	int sa = ldst_pointer_sa(code, i); int32_t bias; uint32_t words;
+	if (sa < 0 || !usse_thread_buffer_info(g->prog, sa, &bias, &words)) return 0;
+	if (sa_out) *sa_out = sa;
+	if (words_out) *words_out = words;
+	return 1;
+}
+static int ldst_texture_info(Gen *g, const UOp *code, int i, int32_t *bias_out, uint32_t *words_out) {
+	int sa = ldst_pointer_sa(code, i); int32_t bias; uint32_t words;
+	if (sa < 0 || !usse_texture_buffer_info(g->prog, sa, &bias, &words)) return 0;
+	if (bias_out) *bias_out = bias;
+	if (words_out) *words_out = words;
+	return 1;
+}
+static void emit_ldst_texture(Gen *g, const UOp *op, const UOp *code, int i, int *ok) {
+	int32_t bias; uint32_t words;
+	if (!ldst_texture_info(g, code, i, &bias, &words) || op->sub2 || op->args[3] != 4 ||
+	    op->s1.bank != BK_IMM || op->s2.bank != BK_IMM) {
+		if (!g->why[0]) snprintf(g->why, sizeof g->why, "texture-buffer LDST form");
+		*ok = 0; return;
+	}
+	int32_t off = (int32_t)op->s1.num * 4 + (op->args[0] ? 0 : 4) + (int32_t)op->s2.num;
+	for (int k = 0; k < op->reps; k++) {
+		int32_t index = bias + off + k * 4;
+		uint32_t v = index >= 0 && !(index & 3) && (uint32_t)index / 4 < words ?
+		             usse_texture_buffer_word(g->prog, (uint32_t)index / 4) : 0;
+		write_word(g, &op->dst, k, c_uint(&g->s, v), ok);
+	}
+}
+static void emit_ldst_thread(Gen *g, const UOp *op, const UOp *code, int i, int *ok) {
+	Spv *s = &g->s; int sa; uint32_t words;
+	if (!ldst_thread_info(g, code, i, &sa, &words) || !g->var_thread || !words) {
+		if (!g->why[0]) snprintf(g->why, sizeof g->why, "LDST thread buffer is not declared");
+		*ok = 0; return;
+	}
+	UOperand tb; memset(&tb, 0, sizeof tb); tb.bank = BK_SA; tb.type = TY_U32; tb.num = (uint16_t)sa;
+	uint32_t tbase = read_raw_comp(g, &tb, 0, 0, ok);
+	int elemsz = op->args[3];
+	if (op->sub2) {
+		static const int unit[4] = {1, 1, 1, 1};
+		for (int r = 0; r < op->reps; r++) {
+			int off0 = slot_off(g, op->repmode, op->s0.bank, r, unit, 0, ok);
+			int off1 = slot_off(g, op->repmode, op->s1.bank, r, unit, 1, ok);
+			int off2 = slot_off(g, op->repmode, op->s2.bank, r, unit, 2, ok);
+			uint32_t base = read_raw_comp(g, &op->s0, off0, 0, ok);
+			uint32_t off = op->s1.bank == BK_IMM ? c_uint(s, (uint32_t)op->s1.num * (uint32_t)elemsz) :
+			               uop2(s, SpvOpISub, read_raw_comp(g, &op->s1, off1, 0, ok), c_uint(s, 0x10000));
+			if (!op->args[0]) off = uop2(s, SpvOpIAdd, off, c_uint(s, 4));
+			uint32_t data = read_raw_comp(g, &op->s2, off2, 0, ok);
+			if (!*ok) return;
+			uint32_t addr = uop2(s, SpvOpIAdd, base, off), rel = uop2(s, SpvOpISub, addr, tbase);
+			uint32_t inw = result2(s, &s->func, SpvOpULessThan, t_bool(s), rel, c_uint(s, words * 4 - 3));
+			uint32_t aligned = result2(s, &s->func, SpvOpIEqual, t_bool(s), uop2(s, SpvOpBitwiseAnd, rel, c_uint(s, 3)), c_uint(s, 0));
+			uint32_t valid = result2(s, &s->func, SpvOpLogicalAnd, t_bool(s), inw, aligned);
+			uint32_t body = nid(s), merge = nid(s);
+			INS(&s->func, SpvOpSelectionMerge, merge, 0 /*None*/);
+			INS(&s->func, SpvOpBranchConditional, valid, body, merge);
+			INS(&s->func, SpvOpLabel, body);
+			uint32_t idx = uop2(s, SpvOpShiftRightLogical, rel, c_uint(s, 2));
+			store(s, access1(s, g->ptr_priv_u, g->var_thread, idx), data);
+			INS(&s->func, SpvOpBranch, merge);
+			INS(&s->func, SpvOpLabel, merge);
+		}
+		return;
+	}
+	uint32_t base = read_raw_comp(g, &op->s0, 0, 0, ok);
+	uint32_t off = op->s1.bank == BK_IMM ? c_uint(s, (uint32_t)op->s1.num * (uint32_t)elemsz) :
+	               uop2(s, SpvOpISub, read_raw_comp(g, &op->s1, 0, 0, ok), c_uint(s, 0x10000));
+	if (!op->args[0]) off = uop2(s, SpvOpIAdd, off, c_uint(s, 4));
+	uint32_t off2 = read_raw_comp(g, &op->s2, 0, 0, ok);
+	if (!*ok) return;
+	uint32_t addr = uop2(s, SpvOpIAdd, uop2(s, SpvOpIAdd, base, off), off2);
+	for (int k = 0; k < op->reps; k++) {
+		uint32_t a = k ? uop2(s, SpvOpIAdd, addr, c_uint(s, (uint32_t)(k * elemsz))) : addr;
+		uint32_t rel = uop2(s, SpvOpISub, a, tbase);
+		uint32_t inw = result2(s, &s->func, SpvOpULessThan, t_bool(s), rel, c_uint(s, words * 4 - (uint32_t)elemsz + 1));
+		uint32_t idx = uop2(s, SpvOpShiftRightLogical, rel, c_uint(s, 2));
+		idx = result3(s, &s->func, SpvOpSelect, t_uint(s), inw, idx, c_uint(s, 0));
+		uint32_t word = load(s, t_uint(s), access1(s, g->ptr_priv_u, g->var_thread, idx));
+		if (elemsz < 4) {
+			uint32_t shift = uop2(s, SpvOpShiftLeftLogical, uop2(s, SpvOpBitwiseAnd, rel, c_uint(s, (uint32_t)(4 - elemsz))), c_uint(s, 3));
+			word = uop2(s, SpvOpBitwiseAnd, uop2(s, SpvOpShiftRightLogical, word, shift), c_uint(s, elemsz == 2 ? 0xFFFFu : 0xFFu));
+		}
+		word = result3(s, &s->func, SpvOpSelect, t_uint(s), inw, word, c_uint(s, 0));
+		if (op->dst.bank == BK_IDXD1 || op->dst.bank == BK_IDXD2) continue;
+		RegPtr p = bank_ptr(g, op->dst.bank, op->dst.num + k);
+		if (!p.ok) { *ok = 0; return; }
+		store(s, p.ptr, word);
+	}
 }
 static uint32_t sa_win_comp(Gen *g, int w, int comp) {   /* UsseDrawUniforms.win[w][comp], member 2 of the SA block */
 	Spv *s = &g->s; uint32_t id = nid(s);
@@ -1516,12 +1699,11 @@ static void emit_ldst(Gen *g, const UOp *op, const UOp *code, int i, int *ok) {
 		store(s, p.ptr, word);
 	}
 }
-/* LDST in a fragment program: its pointers (the SA words of ldst_pointer_sa) lie in a GPU render target -- Killzone's
- * quarter-res pass reads four rows of its HDR scene through four uniform-buffer pointers. The target is bound as a
- * texture (window w: ldst_img[w]) and a load becomes a texel fetch, packed back into the guest's bytes; the window's
- * place in the uniform block is UsseDrawUniforms.win[w] = { the target's address, its bytes, its row bytes, kind |
- * bytes a pixel << 8 } (kind 1: F16F16F16F16 -> PackHalf2x16 of .xy or .zw; else 8-bit RGBA -> PackUnorm4x8).
- * gfx_gpu.c sends the draw to the software path when a pointer isn't inside a GPU target. Outside the window: 0. */
+/* LDST in a fragment program: a pointer inside a GPU render target uses a sampled-image fetch
+ * (Killzone's quarter-res HDR reads), while any other guest pointer uses the same storage-buffer
+ * window ring as vertex LDST. UsseDrawUniforms.win[w] is { guest base, bytes, row bytes, kind |
+ * bytes-per-pixel << 8 } for a target, or { guest base, bytes, ring word offset, 0x80000000 } for
+ * a memory window. Both resources stay declared so one shader module serves either draw state. */
 static uint32_t umax2(Spv *s, uint32_t a, uint32_t b) { return result3(s, &s->func, SpvOpSelect, t_uint(s), result2(s, &s->func, SpvOpUGreaterThan, t_bool(s), a, b), a, b); }
 static void emit_ldst_target(Gen *g, const UOp *op, const UOp *code, int i, int *ok) {
 	Spv *s = &g->s;
@@ -1538,28 +1720,45 @@ static void emit_ldst_target(Gen *g, const UOp *op, const UOp *code, int i, int 
 	if (!*ok) return;
 	uint32_t addr = uop2(s, SpvOpIAdd, uop2(s, SpvOpIAdd, base, off), off2);
 	uint32_t one = c_uint(s, 1);
-	uint32_t tbase = sa_win_comp(g, w, 0), tbytes = sa_win_comp(g, w, 1), rowb = umax2(s, sa_win_comp(g, w, 2), one), kb = sa_win_comp(g, w, 3);
+	uint32_t tbase = sa_win_comp(g, w, 0), tbytes = sa_win_comp(g, w, 1), woff = sa_win_comp(g, w, 2), rowb = umax2(s, woff, one), kb = sa_win_comp(g, w, 3);
+	uint32_t is_mem = result2(s, &s->func, SpvOpINotEqual, tb, uop2(s, SpvOpBitwiseAnd, kb, c_uint(s, 0x80000000u)), c_uint(s, 0));
 	uint32_t bpp = umax2(s, uop2(s, SpvOpBitwiseAnd, uop2(s, SpvOpShiftRightLogical, kb, c_uint(s, 8)), c_uint(s, 0xff)), one);
 	uint32_t is_f16 = result2(s, &s->func, SpvOpIEqual, tb, uop2(s, SpvOpBitwiseAnd, kb, c_uint(s, 0xff)), one);
 	uint32_t sc = srgb_mask_comp(g, 3);   /* the render scale: a guest pixel is sx x sy texels */
 	uint32_t sx = umax2(s, uop2(s, SpvOpBitwiseAnd, sc, c_uint(s, 0xffff)), one), sy = umax2(s, uop2(s, SpvOpShiftRightLogical, sc, c_uint(s, 16)), one);
-	uint32_t img = result1(s, &s->func, SpvOpImage, g->t_img2d, load(s, g->t_simg, g->ldst_img[w]));
 	for (int k = 0; k < op->reps; k++) {
 		uint32_t a = k ? uop2(s, SpvOpIAdd, addr, c_uint(s, (uint32_t)(k * elemsz))) : addr;
 		uint32_t rel = uop2(s, SpvOpISub, a, tbase);
 		uint32_t inw = result2(s, &s->func, SpvOpULessThan, tb, rel, tbytes);
+
+		uint32_t memblk = nid(s), targetblk = nid(s), merge = nid(s);
+		INS(&s->func, SpvOpSelectionMerge, merge, 0 /*None*/);
+		INS(&s->func, SpvOpBranchConditional, is_mem, memblk, targetblk);
+		INS(&s->func, SpvOpLabel, memblk);
+		uint32_t mem_idx = uop2(s, SpvOpIAdd, woff, uop2(s, SpvOpShiftRightLogical, rel, c_uint(s, 2)));
+		mem_idx = result3(s, &s->func, SpvOpSelect, tu, inw, mem_idx, c_uint(s, 0));
+		uint32_t mem_word = load(s, tu, access2(s, g->ptr_vin_u, g->var_win, c_uint(s, 0), mem_idx));
+		INS(&s->func, SpvOpBranch, merge);
+
+		INS(&s->func, SpvOpLabel, targetblk);
 		uint32_t row = uop2(s, 134 /*UDiv*/, rel, rowb), inrow = uop2(s, 137 /*UMod*/, rel, rowb);
 		uint32_t col = uop2(s, 134 /*UDiv*/, inrow, bpp), sub = uop2(s, SpvOpShiftRightLogical, uop2(s, 137 /*UMod*/, inrow, bpp), c_uint(s, 2));
 		row = result3(s, &s->func, SpvOpSelect, tu, inw, row, c_uint(s, 0)); col = result3(s, &s->func, SpvOpSelect, tu, inw, col, c_uint(s, 0));
 		uint32_t cx = result1(s, &s->func, SpvOpBitcast, ti, uop2(s, SpvOpIMul, col, sx)), cy = result1(s, &s->func, SpvOpBitcast, ti, uop2(s, SpvOpIMul, row, sy));
 		uint32_t coord = result2(s, &s->func, SpvOpCompositeConstruct, t_vec(s, ti, 2), cx, cy);
+		uint32_t img = result1(s, &s->func, SpvOpImage, g->t_img2d, load(s, g->t_simg, g->ldst_img[w]));
 		uint32_t texel = nid(s); INS(&s->func, SpvOpImageFetch, t_vec(s, tf, 4), texel, img, coord, 2 /*Lod*/, c_int(s, 0));
 		uint32_t xy = result2(s, &s->func, SpvOpCompositeConstruct, t_vec(s, tf, 2), composite_extract1(s, tf, texel, 0), composite_extract1(s, tf, texel, 1));
 		uint32_t zw = result2(s, &s->func, SpvOpCompositeConstruct, t_vec(s, tf, 2), composite_extract1(s, tf, texel, 2), composite_extract1(s, tf, texel, 3));
 		uint32_t h01 = result3(s, &s->func, SpvOpExtInst, tu, s->glsl_ext, 58 /*PackHalf2x16*/, xy), h23 = result3(s, &s->func, SpvOpExtInst, tu, s->glsl_ext, 58 /*PackHalf2x16*/, zw);
 		uint32_t w16 = result3(s, &s->func, SpvOpSelect, tu, result2(s, &s->func, SpvOpIEqual, tb, sub, c_uint(s, 0)), h01, h23);
 		uint32_t w8 = result3(s, &s->func, SpvOpExtInst, tu, s->glsl_ext, 55 /*PackUnorm4x8*/, texel);
-		uint32_t word = result3(s, &s->func, SpvOpSelect, tu, is_f16, w16, w8);
+		uint32_t target_word = result3(s, &s->func, SpvOpSelect, tu, is_f16, w16, w8);
+		INS(&s->func, SpvOpBranch, merge);
+
+		INS(&s->func, SpvOpLabel, merge);
+		uint32_t word = nid(s);
+		INS(&s->func, SpvOpPhi, tu, word, mem_word, memblk, target_word, targetblk);
 		if (elemsz < 4) {
 			uint32_t shift = uop2(s, SpvOpShiftLeftLogical, uop2(s, SpvOpBitwiseAnd, rel, c_uint(s, (uint32_t)(4 - elemsz))), c_uint(s, 3));
 			word = uop2(s, SpvOpBitwiseAnd, uop2(s, SpvOpShiftRightLogical, word, shift), c_uint(s, elemsz == 2 ? 0xFFFFu : 0xFFu));
@@ -2196,7 +2395,7 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 	g.is_fragment = usse_is_fragment(prog);
 	g.cube_mask = cube_mask;
 	g.snap_mask = g.is_fragment ? snap_mask : 0;
-	g.vl = vl; g.fl = fl;
+	g.vl = vl; g.fl = fl; g.prog = prog;
 	/* usse.c's run_program initialises inc[s][r]=r (RM_SLMSI's default, identity stepping) before
 	 * every run, unconditionally -- SMLSI/SMBO only override it from wherever they appear in program
 	 * order. Leaving this at all-zero (this pass's own default-initialised state) meant any RM_SLMSI
@@ -2219,10 +2418,22 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 		if (code[i].op == OP_SMP) {
 			int unit = resolve_smp_unit(&code[i], sa_tex_unit);
 			if (unit >= 0 && sampler_slot(&g, unit) < 0 && g.nsmp < 16) g.smp_units[g.nsmp++] = unit;
+			else if (dynamic_smp_unit(&code[i]) && (code[i].sub == 1 || code[i].sub == 2))
+				for (unit = 0; unit < 16; unit++) if (((cube_mask >> unit) & 1) == (uint32_t)(code[i].sub == 2) && sampler_slot(&g, unit) < 0 && g.nsmp < 16) g.smp_units[g.nsmp++] = unit;
 		}
-		if (code[i].op == OP_LDST && !code[i].sub2) {   /* a load: which SA word its address comes from (a fragment program's: a render target, emit_ldst_target) */
-			int sa = ldst_pointer_sa(code, i), k;
-			if (sa >= 0) { for (k = 0; k < g.nwin && g.win_sa[k] != sa; k++); if (k == g.nwin && g.nwin < 8) g.win_sa[g.nwin++] = sa; }
+		if (code[i].op == OP_LDST) {
+			int sa; uint32_t words;
+			if (ldst_texture_info(&g, code, i, 0, 0)) {
+				/* Synthetic sampler descriptors need no guest-memory resource. */
+			} else if (ldst_thread_info(&g, code, i, &sa, &words)) {
+				if (words > g.thread_words) g.thread_words = words;
+			} else if (!code[i].sub2) {   /* a guest/target load: which SA word its address comes from */
+				int k; sa = ldst_pointer_sa(code, i);
+				if (sa >= 0) {
+					for (k = 0; k < g.nwin && g.win_sa[k] != sa; k++) {}
+					if (k == g.nwin && g.nwin < 8) g.win_sa[g.nwin++] = sa;
+				}
+			}
 		}
 	}
 	if (g.is_fragment && fl) for (int i = 0; i < fl->niters; i++) if (fl->iters[i].is_tex) {
@@ -2239,6 +2450,10 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 	g.var_pa = global_var(s, ptr_arr160, SpvStoragePrivate, const_null_array(s, arr160));
 	g.var_o = global_var(s, ptr_arr160, SpvStoragePrivate, const_null_array(s, arr160));
 	g.var_i = global_var(s, ptr_arr16, SpvStoragePrivate, const_null_array(s, arr16));
+	if (g.thread_words) {
+		uint32_t arr = t_array(s, t_u, c_uint(s, g.thread_words), g.thread_words);
+		g.var_thread = global_var(s, t_ptr(s, SpvStoragePrivate, arr), SpvStoragePrivate, const_null_array(s, arr));
+	}
 	{	uint32_t arr2 = t_array(s, t_u, c_uint(s, 2), 2);   /* idx1/idx2: zero at the start of every instance, like UsseInst.idx */
 		g.var_idx = global_var(s, t_ptr(s, SpvStoragePrivate, arr2), SpvStoragePrivate, const_null_array(s, arr2));
 	}
@@ -2390,12 +2605,24 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 		 * usse_spirv_set_fetch_mode); raw-word (U32/S32) colour programs are left to the software path */
 		g.fetch = fl && fl->frag_color_used && fl->color_type != TY_U32 && fl->color_type != TY_S32 ? (fetch_zero_next == 2 ? 4 : fetch_zero_next ? 3 : fetch_mode) : 0;
 		if (g.nwin && g.fetch == 2) { snprintf(g.why, sizeof g.why, "fragment LDST in a framebuffer-fetch program"); ok = 0; }   /* (the input attachment's binding slot sits where the LDST targets would start) */
+		g.ldst_storage_only = g.nwin && g.nsmp + (g.fetch == 1) + g.nwin > 16;
 		if (g.nsmp || g.fetch || g.nwin) {
-			uint32_t ptr_simg = declare_samplers(&g, 2);
-			for (int w = 0; w < g.nwin; w++) {   /* the LDST windows' render targets: after the program's samplers and the framebuffer copy (gfx_gpu.c binds them in that order) */
+			uint32_t ptr_simg = g.nsmp || g.fetch || !g.ldst_storage_only ? declare_samplers(&g, 2) : 0;
+			for (int w = 0; !g.ldst_storage_only && w < g.nwin; w++) {   /* the LDST windows' render targets: after the program's samplers and the framebuffer copy (gfx_gpu.c binds them in that order) */
 				g.ldst_img[w] = global_var(s, ptr_simg, SpvStorageUniformConstant, 0);
 				INS(&s->decos, SpvOpDecorate, g.ldst_img[w], SpvDecorationDescriptorSet, 2);
 				INS(&s->decos, SpvOpDecorate, g.ldst_img[w], SpvDecorationBinding, (uint32_t)(g.nsmp + (g.fetch == 1) + w));
+			}
+			if (g.nwin) {   /* the same windows when they point to ordinary guest memory: one storage buffer after every sampled resource */
+				uint32_t rtarr = nid(s); INS(&s->types, 29 /*OpTypeRuntimeArray*/, rtarr, t_u);
+				INS(&s->decos, SpvOpDecorate, rtarr, 6 /*ArrayStride*/, 4);
+				uint32_t wstruct = nid(s); INS(&s->types, 30, wstruct, rtarr);
+				INS(&s->decos, SpvOpDecorate, wstruct, SpvDecorationBlock);
+				INS(&s->decos, SpvOpMemberDecorate, wstruct, 0, SpvDecorationOffset, 0);
+				g.var_win = global_var(s, t_ptr(s, 12 /*StorageBuffer*/, wstruct), 12, 0);
+				INS(&s->decos, SpvOpDecorate, g.var_win, SpvDecorationDescriptorSet, 2);
+				INS(&s->decos, SpvOpDecorate, g.var_win, SpvDecorationBinding, (uint32_t)(g.nsmp + (g.fetch == 1) + (g.ldst_storage_only ? 0 : g.nwin)));
+				g.ptr_vin_u = t_ptr(s, 12, t_u);
 			}
 			if (g.fetch == 1) {
 				g.fetch_var = global_var(s, ptr_simg, SpvStorageUniformConstant, 0);
@@ -2523,7 +2750,21 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 				nbr++;
 			}
 			if (op->op == OP_BR) {
+				if (op->imm == 1 && !op->args[0]) continue;   /* branch to the next instruction: exactly the normal fall-through */
 				int target = i + (int)op->imm, lp = nbr - 1;
+				/* A compiler's three-way ladder can share one closing jump between a nested
+				 * if/else and its parent's then part. Close the inner merge first, then use that
+				 * same guest branch to enter the parent's else block. */
+				if (op->pred_kind == 0 && op->imm > 0 && !op->args[0] && nbr >= 2) {
+					const int in = nbr - 1, out = nbr - 2;
+					if (brstack[in].kind == 0 && brstack[in].else_at < 0 && brstack[in].end == target &&
+					    brstack[out].kind == 0 && brstack[out].else_at == i && brstack[out].else_end == target) {
+						INS(&s->func, SpvOpBranch, brstack[in].merge); INS(&s->func, SpvOpLabel, brstack[in].merge); nbr--;
+						INS(&s->func, SpvOpBranch, brstack[out].merge); INS(&s->func, SpvOpLabel, brstack[out].else_lbl);
+						brstack[out].end = brstack[out].else_end; brstack[out].else_at = -1;
+						continue;
+					}
+				}
 				while (lp >= 0 && brstack[lp].kind != 1) lp--;   /* the innermost loop */
 				if (op->pred_kind != 0 && op->imm > 0 && !op->args[0] && lp >= 0 && (target == brstack[lp].back + 1 || target == brstack[lp].back)) {
 					/* break (to just past the back edge) or continue (to the back edge) */
@@ -2545,7 +2786,9 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 				if (target - 1 > i) {
 					const UOp *j = &code[target - 1];
 					int t2 = target - 1 + (int)j->imm;
-					if (j->op == OP_BR && j->pred_kind == 0 && j->imm > 0 && !j->args[0] && t2 <= n && (!nbr || t2 <= BR_LIMIT(brstack[nbr - 1]))) else_end = t2;
+					int inside = !nbr || t2 <= BR_LIMIT(brstack[nbr - 1]);
+					int shared = nbr && brstack[nbr - 1].kind == 0 && brstack[nbr - 1].else_at >= target && t2 == brstack[nbr - 1].else_end;
+					if (j->op == OP_BR && j->pred_kind == 0 && j->imm > 0 && !j->args[0] && t2 <= n && (inside || shared)) else_end = t2;
 				}
 				uint32_t p = load(s, t_bool(s), pred_ptr(&g, op->pred_reg));
 				uint32_t taken = op->pred_kind == 1 ? p : result1(s, &s->func, SpvOpLogicalNot, t_bool(s), p);
@@ -2606,7 +2849,12 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 			case OP_KILL: if (!g.is_fragment) ok = 0; else emit_kill(&g, op, &ok); break;
 			case OP_DEPTHF: emit_depthf(&g, op, &ok); break;
 			case OP_LIMM: emit_limm(&g, op, &ok); break;
-			case OP_LDST: if (g.is_fragment) emit_ldst_target(&g, op, code, i, &ok); else emit_ldst(&g, op, code, i, &ok); break;
+			case OP_LDST:
+				if (ldst_texture_info(&g, code, i, 0, 0)) emit_ldst_texture(&g, op, code, i, &ok);
+				else if (ldst_thread_info(&g, code, i, 0, 0)) emit_ldst_thread(&g, op, code, i, &ok);
+				else if (g.is_fragment && !g.ldst_storage_only) emit_ldst_target(&g, op, code, i, &ok);
+				else emit_ldst(&g, op, code, i, &ok);
+				break;
 			default: ok = 0; break;
 			}
 			if (pred_merge) { INS(&s->func, SpvOpBranch, pred_merge); INS(&s->func, SpvOpLabel, pred_merge); }
@@ -2639,7 +2887,7 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 
 	if (max_smp >= 0 && smp_units_out) for (int i = 0; i < g.nsmp && i < max_smp; i++) smp_units_out[i] = g.smp_units[i];
 	if (nsmp_out) *nsmp_out = g.nsmp;
-	m.nldst_sa = g.nwin; memcpy(m.ldst_sa, g.win_sa, sizeof m.ldst_sa); m.motion = g.motion;
+	m.nldst_sa = g.nwin; memcpy(m.ldst_sa, g.win_sa, sizeof m.ldst_sa); m.frag_ldst_storage = g.ldst_storage_only; m.motion = g.motion;
 	if (!ok) { free(s->caps.w); free(s->ext.w); free(s->memmodel.w); free(s->entry.w); free(s->execmodes.w); free(s->decos.w); free(s->types.w); free(s->func.w); m.ok = 0; return m; }
 
 	uint32_t iface[2 + 16 + 7]; int niface = 0;

@@ -29,7 +29,6 @@ typedef struct {
 	uint32_t idx[2];      /* index registers idx1, idx2 */
 	int killed;            /* KILL executed */
 	int depth_written; float depth;   /* DEPTHF */
-	uint32_t thread_buf;    /* guest scratch for container 18 (thread buffer), one per draw, reused per instance */
 	uint32_t probe;          /* RECOMP_PROBE ...@k: the register word after primary instruction k (usse.c's run_program; gfx_soft.c shows it) */
 } UsseInst;
 

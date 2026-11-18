@@ -12,10 +12,10 @@
  * VMAD2, VNMAD, VMAD, VDP, VDUAL, VCOMP, VTST, VTSTMSK, VBW, SOP2, I8MAD, I16MAD, I32MAD,
  * I32MAD2, SMP, KILL, DEPTHF, LIMM, LDST, SMLSI/SMBO, simple (pN / !pN) predication, INDEXED1/2
  * operands and the INDEX bank (a runtime OpAccessChain index computed from the idx1/idx2
- * registers, see usse_spirv.c's idx_ptr). NOT yet covered: SOP2M/SOP3 (SOP2's masked and
- * three-source siblings) and BR -- a program using any of these fails translation (ok=0) and
- * the caller should fall back to the software path for that draw, same as render_interp() already
- * does for usse_supported().
+ * registers, see usse_spirv.c's idx_ptr). Structured BR forms cover forward skips, if/else and
+ * three-way ladders, and loops with break/continue. NOT yet covered: SOP2M/SOP3 (SOP2's masked and
+ * three-source siblings) and arbitrary or crossing branch graphs; a program using one fails
+ * translation (ok=0) and the caller falls back to the software path for that draw.
  */
 #ifndef RECOMP_USSE_SPIRV_H
 #define RECOMP_USSE_SPIRV_H
@@ -31,9 +31,12 @@ typedef struct {
 	                                        * attachment (InputAttachmentIndex 0) -- spirv-cross's MSL framebuffer fetch, a [[color(0)]]
 	                                        * input straight from tile memory: nothing to copy or bind (usse_spirv_set_fetch_mode) */
 	int pa_words;                          /* vertex: words per vertex record in the PA storage buffer (usse_program_pa_words) */
-	int ldst_sa[8], nldst_sa;              /* vertex: the SA words whose values are guest pointers the program's LDSTs load through
-	                                        * (bone matrices: address = index*stride + SA[k]); the host binds a window of guest
-	                                        * memory from each as storage buffer 1 and describes them in UsseDrawUniforms.win */
+	int ldst_sa[8], nldst_sa;              /* the SA words whose values are guest pointers the program's LDSTs load through
+	                                        * (container-18 thread-buffer pointers use Private memory and are omitted);
+	                                        * the host describes each window in UsseDrawUniforms.win and binds guest memory
+	                                        * as a storage buffer or a fragment render target as a sampled image */
+	int frag_ldst_storage;                  /* fragment: all LDST windows use guest-memory storage instead of sampled target images,
+	                                        * keeping the stage within 16 sampled resources */
 	int motion;                            /* vertex: the motion variant (usse_spirv_set_motion): a second uniform block (binding 1, the
 	                                        * previous frame's SA) and the clip position from each at locations 30 and 31 */
 	char err[160];
@@ -43,13 +46,16 @@ typedef struct {
  * OTHER program in the pair) -- needed so the vertex shader's varying outputs and the fragment
  * shader's varying inputs agree on Location numbers (word (o_reg-4)/4 of the vertex's O bank,
  * §4.1's fixed order) without a separate negotiation step; with canonical varyings
- * (usse_spirv_set_canonical_varyings) a fragment module needs no vl. tex_unit_of_smp, if non-null, is
- * filled in with the resolved (compile-time-constant, see usse_spirv.c's block comment) texture
- * unit for each SMP instruction found, in program order, for the caller to bind. */
+ * (usse_spirv_set_canonical_varyings) a fragment module needs no vl. smp_units, if non-null, is
+ * filled with the texture units the module names, for the caller to bind. A dependent sampler has
+ * one compile-time-resolved unit; texture-buffer indexing can name every compatible unit and
+ * selects one through structured shader control flow at run time. */
 /* the uniform block both stages read: the 256 SA words, then the draw's viewport z mapping
  * (zOffset, zScale) the vertex epilogue applies to clip z; the host pushes one of these per stage */
 #define USSE_LDST_WINDOW (64u << 10)   /* bytes of guest memory bound per LDST pointer */
-/* win[w] = { guest base, bytes, word offset in storage buffer 1, 0 }; tex_srgb = { units whose sampled
+/* A storage-backed win[w] is { guest base, bytes, word offset in the stage's LDST storage buffer, 0 };
+ * a fragment target-backed window is { target base, bytes, row bytes, kind | bytes-per-pixel << 8 }.
+ * tex_srgb = { units whose sampled
  * colour the shader decodes sRGB -> linear (a gamma texture bound to plain UNORM data), units whose
  * sampled colour it re-encodes (a non-gamma texture over an sRGB-format render target, which the GPU
  * decodes on sampling), 0, 0 } (gfx.h GFX_TEX_GAMMA) */

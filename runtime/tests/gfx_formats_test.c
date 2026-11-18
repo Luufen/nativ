@@ -5,6 +5,8 @@
  * Contracts (SceGxm formats):
  *  - texture base 0x0e U2U10U10U10, SWIZZLE4 ABGR: R in bits 0-9, G 10-19, B 20-29, A 30-31 (A /3);
  *  - texture base 0x13 F32M: one 32-bit float component (placed by the SWIZZLE1 modes, as F32);
+ *  - texture base 0x19 SE5M9M9M9: R, G and B are 9-bit mantissas in ascending bit order, scaled by a shared
+ *    5-bit exponent in bits 27-31; each component is mantissa * 2^(exponent - 24);
  *  - colour format 0x60800000 U2U10U10U10: the same fields, in the 8-bit formats' component orders; what a render target
  *    stores in this format reads back as a 0x0e texture with the same values.
  * Observed (AUTO-01 GR-13): Gravity Rush renders its scene into a 0x60800000 target and composites it as a 0x0e texture;
@@ -50,6 +52,29 @@ int main(void) {
 	check("F32M texel: R 0.625 (as F32), G 0, B 0, A 1", near(px[0], 0.625f) && near(px[1], 0) && near(px[2], 0) && near(px[3], 1));
 	check("F32M is 4 bytes a texel (the GPU upload's size)", gfx_texture_bpp(&t) == 4);
 
+	/* SE5M9M9M9 texture, 2x1: (1, 0.5, 0.25) and the format's maximum finite value in every channel */
+	WR32(T + 0x180, 256u | 128u << 9 | 64u << 18 | 16u << 27);
+	WR32(T + 0x184, 511u | 511u << 9 | 511u << 18 | 31u << 27);
+	t.data = T + 0x180; t.width = 2; t.height = 1; t.format = 0x19000000u | 8;
+	gfx_decode_texture_f32(&t, px);
+	check("SE5M9M9M9 texel 0: R 1, G 0.5, B 0.25, A 1", near(px[0], 1) && near(px[1], 0.5f) && near(px[2], 0.25f) && near(px[3], 1));
+	check("SE5M9M9M9 texel 1: maximum finite 65408 in RGB", px[4] == 65408 && px[5] == 65408 && px[6] == 65408 && px[7] == 1);
+	check("SE5M9M9M9 is 4 bytes a texel (the GPU upload's size)", gfx_texture_bpp(&t) == 4);
+	t.format = 0x19000000u | 0x1000u | 8;
+	gfx_decode_texture_f32(&t, px);
+	check("SE5M9M9M9 RGB swizzle swaps R and B", near(px[0], 0.25f) && near(px[1], 0.5f) && near(px[2], 1));
+	/* The matching colour target must store packed RGB rather than falling through to RGBA8, where black with A=1
+	 * became 0xff000000 and decoded through the shared exponent as a nearly-white HDR value. */
+	GfxTarget se; memset(&se, 0, sizeof se); se.data = T + 0x1c0; se.width = 2; se.height = 1; se.stride = 2; se.format = 0x31000000u;
+	float sei[8] = {1, 0.5f, 0.25f, 0.125f, 0, 0, 0, 1}, seo[8];
+	gfx_encode_target_f32(&se, sei);
+	check("SE5M9M9M9 target stores (1, 0.5, 0.25) in the shared-exponent word", RD32(T + 0x1c0) == (256u | 128u << 9 | 64u << 18 | 16u << 27));
+	check("SE5M9M9M9 target stores black as zero regardless of alpha", RD32(T + 0x1c4) == 0);
+	gfx_decode_target_f32(&se, seo);
+	check("SE5M9M9M9 target round trip restores RGB and supplies alpha 1",
+	      near(seo[0], 1) && near(seo[1], 0.5f) && near(seo[2], 0.25f) && seo[3] == 1 && seo[4] == 0 && seo[5] == 0 && seo[6] == 0 && seo[7] == 1);
+	check("SE5M9M9M9 target is 4 bytes a pixel", gfx_target_bpp(&se) == 4);
+
 	/* F32F32 texture (base 0x1e), 2x1: two 32-bit floats a texel, R then G, sampled as (r, g, 0, 1) */
 	{ float v[4] = {0.25f, -3.5f, 1024.0f, 0.125f}; for (int k = 0; k < 4; k++) { uint32_t w; memcpy(&w, &v[k], 4); WR32(T + 0x300 + 4 * k, w); }
 	  GfxTexture f2; memset(&f2, 0, sizeof f2); f2.data = T + 0x300; f2.width = 2; f2.height = 1; f2.format = 0x1e000000u | 8;
@@ -78,6 +103,34 @@ int main(void) {
 	gfx_decode_texture_f32(&t, px);
 	check("the target's memory read as a 0x0e texture: the same colours",
 	      near(px[0], 1) && near(px[1], 514 / 1023.f) && near(px[2], 0) && near(px[3], 1) && near(px[6], 1) && near(px[7], 0));
+
+	/* A no-mip cube's swizzled faces are tightly packed. A 4x4 RGBA8 face is 64 bytes, not the
+	 * 128 bytes a linear texture's width-rounded row stride would imply. */
+	{
+		static const uint8_t col[6][4] = {
+			{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255},
+			{255, 255, 0, 255}, {255, 0, 255, 255}, {0, 255, 255, 255}
+		};
+		static const float dir[6][3] = {
+			{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+		};
+		GfxTexture cube; memset(&cube, 0, sizeof cube);
+		cube.data = T + 0x1000; cube.width = cube.height = 4; cube.format = 0x0c000000u;
+		cube.u_mode = 0x32; cube.v_mode = 2;
+		for (int face = 0; face < 6; face++) {
+			uint32_t word = col[face][0] | (uint32_t)col[face][1] << 8 | (uint32_t)col[face][2] << 16 | (uint32_t)col[face][3] << 24;
+			for (int i = 0; i < 16; i++) WR32(cube.data + 64u * (uint32_t)face + 4u * (uint32_t)i, word);
+		}
+		for (int face = 0; face < 6; face++) {
+			float c[4]; char what[80];
+			cube_texel(&cube, dir[face][0], dir[face][1], dir[face][2], 0, c);
+			snprintf(what, sizeof what, "4x4 no-mip cube samples tightly packed face %d", face);
+			check(what, near(c[0], col[face][0] / 255.f) && near(c[1], col[face][1] / 255.f) &&
+			            near(c[2], col[face][2] / 255.f) && near(c[3], col[face][3] / 255.f));
+		}
+		GfxTexture face5; gfx_texture_face(&cube, 5, &face5);
+		check("4x4 no-mip cube face offsets advance by 64 bytes", face5.data == cube.data + 5 * 64);
+	}
 	printf("%d checks, %d failed\n", n, fails);
 	return fails ? 1 : 0;
 }

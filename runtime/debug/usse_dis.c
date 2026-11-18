@@ -15,6 +15,8 @@
 #include "usse_internal.h"   /* UOp, OP_*, BK_*: the VPCK constant-ROM scan below */
 
 uint8_t *recomp_mem;   /* rt.h's arena pointer; here it just points at one loaded file at a time */
+uint32_t recomp_watch_lo, recomp_watch_hi;   /* rt.h's guest write watch: disabled */
+void recomp_watch_write(uint32_t addr, uint32_t value, int width) { (void)addr; (void)value; (void)width; }
 
 static uint8_t *load_file(const char *path, long *size) {
 	FILE *f = fopen(path, "rb");

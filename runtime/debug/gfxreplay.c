@@ -292,11 +292,13 @@ int main(int argc, char **argv) {
 					if (d.funiforms) { fprintf(stderr, "   funiforms %#x:", d.funiforms); for (int i = 0; i < 16; i++) { float v; memcpy(&v, G(d.funiforms + 4 * i), 4); fprintf(stderr, "%s%08x(%g)", i % 8 ? " " : "\n     ", RD32(d.funiforms + 4 * i), v); } fprintf(stderr, "\n"); }
 				}
 			}
-			{	/* RECOMP_REPLAY_TEX=hexaddr:path: at the stop draw, that texture's level 0 as the software sampler decodes it (RGBA floats; see gfx_gpu.c's RECOMP_GPU_DUMP_TEX) */
+			{	/* RECOMP_REPLAY_TEX=hexaddr:path: at the stop draw, that texture as the software sampler decodes it (RGBA floats; level 0 unless RECOMP_REPLAY_TEX_LEVEL selects another; see gfx_gpu.c's RECOMP_GPU_DUMP_TEX) */
 				static const char *dt = 0; static int dti = 0; if (!dti) { dti = 1; dt = getenv("RECOMP_REPLAY_TEX"); }
 				const char *path = dt ? strchr(dt, ':') : 0;
 				if (path && draws + 1 == stop) for (int k = 0; k < 16; k++) if (d.tex[k].data && d.tex[k].data == strtoul(dt, 0, 16)) {
-					GfxTexture lv; gfx_texture_level(&d.tex[k], 0, &lv);
+					int level = getenv("RECOMP_REPLAY_TEX_LEVEL") ? atoi(getenv("RECOMP_REPLAY_TEX_LEVEL")) : 0;
+					int levels = gfx_texture_levels(&d.tex[k]); if (level < 0) level = 0; if (level >= levels) level = levels - 1;
+					GfxTexture lv; gfx_texture_level(&d.tex[k], level, &lv);
 					float *fb = malloc(16u * lv.width * lv.height); gfx_decode_texture_f32(&lv, fb);
 					FILE *o = fopen(path + 1, "wb"); if (o) { fwrite(fb, 16, (size_t)lv.width * lv.height, o); fclose(o); }
 					free(fb); break;
