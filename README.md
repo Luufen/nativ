@@ -33,7 +33,7 @@ Dancing games from PersonaDancingRecomp.
 | Invizimals: The Resistance | PCSF00510 | 1.00 | Yes | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
 | Killzone: Mercenary (EU) | PCSF00243 | 1.00 | Yes | up to 120 | 16:9 | 5760×3264 (6×) |
 | WipEout 2048 | PCSD00005 | 1.00 | Yes | up to 120 | up to 21:9 | 5760×3264 (6×) |
-| LittleBigPlanet | PCSA00017 | 1.00 | Yes | 30 | not checked yet | 5760×3264 (6×) |
+| LittleBigPlanet | PCSA00017 | 1.00 | Yes | 30 (60 / 120: the game runs faster) | not checked yet | 5760×3264 (6×) |
 | Gravity Rush | PCSF00024 | 1.00 | Yes | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
 | Ratchet & Clank Trilogy | PCSF00482 | 1.00 | Yes | 30, slower in busy scenes | 16:9 | 5760×3264 (6×) |
 | PlayStation All-Stars Battle Royale | PCSF00153 | 1.00 | Yes | 60, slower in busy scenes | 16:9 | 5760×3264 (6×) |
@@ -52,6 +52,7 @@ Dancing games from PersonaDancingRecomp.
 | Freedom Wars | PCSF00446 | 1.00 | Yes | 30 (60 / 120 experimental) | 16:9 (wider experimental) | 5760×3264 (6×) |
 | Silent Hill: Book of Memories | PCSB00115 | 1.00 | Yes | not measured yet | not checked yet | 5760×3264 (6×) |
 | Resistance: Burning Skies (US) | PCSA00008 | 1.02 | Yes | up to 120 | not checked yet | 5760×3264 (6×) |
+| Gundam Breaker 3 (Asia) | PCSH00208 | 1.30 | No (tested by Tzeentchnet) | 30 | not checked yet | not checked yet |
 
 Most of these packs were made with the fork's porting tools (below): they hold what Nativ needs to build and boot the
 game from your copy, plus frame-rate and widescreen settings found automatically.
@@ -63,7 +64,7 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 ## What's new compared with Project Nativ v0.1.5
 
 **Games**
-- **31 more games** than upstream's 4 (see [Tested games](#tested-games)): all render at **up to 6× the Vita's
+- **32 more games** than upstream's 4 (see [Tested games](#tested-games)): they render at **up to 6× the Vita's
   resolution (4K and beyond)**, 10 of them run at **up to 120 fps** and 7 fill **21:9** widescreen.
 - **A game without a pack still gets a start:** adding it writes a first pack automatically.
 
@@ -99,7 +100,8 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 - **Many recompiler and system fixes**: more ARM and NEON instructions, game modules loaded while playing, threads,
   fibers, timers, the console's memory budget and its system fonts. These get most of the tested games to their menus.
 - **From Tzeentchnet's fork**: **Resistance: Burning Skies** and the fixes it needed (shader byte operations on all
-  four colour channels, two-sided stencil, deferred lighting, NGS sound buffers, an option to skip mission intros).
+  four colour channels, two-sided stencil, deferred lighting, NGS sound buffers, an option to skip mission intros),
+  and **Gundam Breaker 3** (Asia) with more shader, texture and NEON support (its research notes: `docs/games/`).
 
 **For people porting a game**
 - **`vitarecomp bootstrap`** builds and tests a new game until no new code turns up; **`hooks-scan`** suggests
@@ -108,7 +110,8 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 ## Tested
 
 - Windows 11 (x64): Soul Sacrifice Delta, Persona 4: Dancing All Night, Tearaway and Resistance: Burning Skies (US
-  1.02, also at 60 and 120 fps) played from a local build of the same source; for every game, see the Tested column above.
+  1.02, also at 60 and 120 fps), Killzone: Mercenary (EU, also at 120 fps) and LittleBigPlanet (30 fps, and the hint
+  shown for 60 / 120) played from a local build of the same source; for every game, see the Tested column above.
 - Steam Deck: Medieval Defenders and Soul Sacrifice Delta, each exported as an AppImage (`vitarecomp export-appimage`).
 - Android (Samsung Galaxy Tab S7, Android 13): AQUA KITTY DX and Soul Sacrifice Delta, each exported as an `.apk`,
   played by touch with picture, sound and movies.
@@ -161,7 +164,8 @@ The Persona Dancing packs, Vita3K-style texture packs and their renderer fixes c
 with its full history (setup and notes: `packs/PCSE00764/README.md`). [Vita3K](https://github.com/Vita3K/Vita3K) is the
 reference for how many of the Vita's system functions behave.
 Resistance: Burning Skies' EU pack and the fixes it needed come from [Tzeentchnet's fork](https://github.com/Tzeentchnet/nativ)
-by **Tzeentchnet** (taken with their authorship; also offered upstream as their pull request #77).
+by **Tzeentchnet** (taken with their authorship; also offered upstream as their pull request #77), as does the
+Gundam Breaker 3 pack with its fixes (this fork's pull request #14, merged with their authorship).
 
 ---
 
@@ -291,8 +295,6 @@ reporting a bug.
 - [The runtime in detail](docs/runtime.md): display timing, audio, the GPU backend, controls, hooks and metrics.
 - [Verification](docs/verification.md): the regression gate and how the translation and renderer are checked.
 - [Debugging a game](docs/debugging.md): logs, captures, replays and the renderer's switches.
-- [Game research](docs/games/README.md): title-specific architecture, formats, localization and
-  reproducible findings.
 - [Online play](docs/online.md): matchmaking, finding other players, and the encrypted links between them.
 - [The shader compiler](docs/shader-compiler.md) and [the USSE instruction set](docs/usse-isa.md): the Vita's GPU
   shaders and how we translate them.
