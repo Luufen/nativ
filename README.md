@@ -291,6 +291,8 @@ reporting a bug.
 - [The runtime in detail](docs/runtime.md): display timing, audio, the GPU backend, controls, hooks and metrics.
 - [Verification](docs/verification.md): the regression gate and how the translation and renderer are checked.
 - [Debugging a game](docs/debugging.md): logs, captures, replays and the renderer's switches.
+- [Game research](docs/games/README.md): title-specific architecture, formats, localization and
+  reproducible findings.
 - [Online play](docs/online.md): matchmaking, finding other players, and the encrypted links between them.
 - [The shader compiler](docs/shader-compiler.md) and [the USSE instruction set](docs/usse-isa.md): the Vita's GPU
   shaders and how we translate them.
