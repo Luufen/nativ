@@ -55,6 +55,11 @@ static inline int fr_grid_hz(int rate) { return rate >= 120 ? 120 : 60; }
 static inline uint64_t fr_grid_period_us(int rate) { return rate >= 120 ? 8333 : 16667; }
 /* WaitSetFrameBufMulti(n)'s interval at a rate: 1..8 as asked at 30, one edge above */
 static inline uint32_t fr_swap_interval(uint32_t n, int rate) { if (!n) n = 1; if (n > 8) n = 8; return n > 1 && rate >= 60 ? 1 : n; }
+/* sceDisplayWaitVblankStartMulti(n): n edges -- unless the pack says the game ticks its frame with it (RECOMP_VBLANK_MULTI_SWAP=1,
+ * `swap`): then it is a swap interval too, 1 edge above 30. Killzone Mercenary's missions wait Multi(2) a frame (its 30 Hz on the
+ * Vita's 60 Hz display): on the 120 Hz grid that held them at 2-3 edges, 40-45 fps (KZ-120). Off by default: a game that waits
+ * Multi(n) for a delay of n vblanks keeps it. */
+static inline uint32_t fr_vblank_multi(uint32_t n, int rate, int swap) { if (!n) n = 1; if (n > 8) n = 8; return swap ? fr_swap_interval(n, rate) : n; }
 /* a frame's time in seconds from the grid edges it took */
 static inline float fr_frame_dt(uint64_t edges, int rate) {
 	const uint64_t hz = (uint64_t)fr_grid_hz(rate), most = hz / 30;
