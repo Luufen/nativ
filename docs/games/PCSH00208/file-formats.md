@@ -95,4 +95,3 @@ can emit:
 - a cryptographic digest of a payload when exact identity is needed.
 
 Do not emit payload bytes or official text into logs intended for a pull request.
-
