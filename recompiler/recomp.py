@@ -1436,11 +1436,36 @@ class Fn:
         """the function's C lines; its full instructions exist only while they are built"""
         self.insns = decode(self.src[0], self.src[1], True, self.src[2])
         self.addrs = set(self.iaddrs)
+        self.prefix, self.rejoin = self.entry_prefix()
+        self.addrs |= {i.address for i in self.prefix}
         try:
             return self._build()
         finally:
-            del self.insns, self.addrs
+            del self.insns, self.addrs, self.prefix, self.rejoin
             self.__dict__.pop("_bt", None)
+
+    def entry_prefix(self):
+        """(instructions, rejoin address) for an entry that lands inside an instruction of the function's own linear
+        decode: the instructions decoded from the entry up to the first address the body's decode also starts an
+        instruction at (rejoin; None when they never meet). ([], None) when the entry starts an instruction.
+        The analysis can give an entry a chunk that overlaps the code before it: the spans merge, the decode runs
+        from the first chunk and a 32-bit Thumb instruction covers the entry, so L_<entry> never existed (PSN-NOVA,
+        PCSH00143 fn_81b688cc: ldr.w at 0x81b688ca, clang "use of undeclared label 'L_81b688cc'"). Called at the
+        entry, the CPU decodes from the entry: so does this prefix, which then continues in the body"""
+        own = {i.address for i in self.insns}
+        if not self.insns or self.entry in own:
+            return [], None
+        span = next(((lo, hi) for lo, hi in self.src[0] if lo <= self.entry <= hi), None)
+        if span is None:
+            return [], None
+        out = []
+        for i in decode([(self.entry, span[1])], self.src[1], True):
+            if i.address in own:
+                return out, i.address
+            if len(out) >= 64:
+                break
+            out.append(i)
+        return out, None
 
     def _build(self):
         lines = [f"void fn_{self.entry:08x}(Cpu *c) {{"]
@@ -1450,7 +1475,12 @@ class Fn:
             lines.append(f"\trecomp_hook_{hook}(c);   /* --hooks: before the body, can change c->r / c->vfp */")
         if self.insns and self.insns[0].address != self.entry:
             lines.append(f"\tgoto L_{self.entry:08x};   /* an entry inside another function's code */")
-        for i in self.insns:
+        body = self.prefix + ([None] if self.prefix else []) + self.insns
+        for i in body:
+            if i is None:   # the end of the entry's own decode: it continues where it meets the body's
+                lines.append(f"\tgoto L_{self.rejoin:08x};   /* the entry's decode meets the body's here */" if self.rejoin is not None
+                             else f"\tUNIMPL(c, 0x{self.prefix[-1].address + self.prefix[-1].size:x}u);   /* the entry's decode never met the body's */")
+                continue
             lines.append(f"L_{i.address:08x}: /* {i.mnemonic} {i.op_str} */")
             lines.append(f"\tTR(0x{i.address:x}u);")
             try:
@@ -1472,7 +1502,7 @@ class Fn:
             return lines
         lines.append("jump:")
         lines.append("\tswitch (c->r[15]) {")
-        for i in self.insns:
+        for i in self.prefix + self.insns:
             lines.append(f"\tcase 0x{i.address:x}u: goto L_{i.address:08x};")
         # a computed jump to another function's entry (a table case that is a split-off entry: libSceFt2's FreeType
         # interpreter, AUTO-01 GR-11) is a tail call: run it and return, as the branch would; anything else asserts
