@@ -1692,6 +1692,41 @@ def main():
             continue
         eset.add(a); ngap += 1
         fns.append(Fn(a, ([(a, min(nxt, a + 0x400) - 1)], False, end + 1), eset, lite=insns[:end + 1]))
+    # ... and ARM methods the same way: an even, word-aligned pointer into a gap enters ARM code (a blx through it
+    # switches state by the target's bit 0). An even word looks like an address far more often than an odd one does,
+    # so it counts only in a vtable row -- next to another code pointer -- and when its ARM decode runs cleanly to a
+    # return (PSN-NOVA, PCSH00143: class methods such as 0x8203a1ac "ldr/add/str/bx lr" and 0x8204c890 only vtables
+    # reach; each stopped a run on its first call)
+    taken = {x for f in fns[len(fns) - ngap:] for x in f.iaddrs}
+    def codeptr(w):
+        a = w & ~1
+        return a in eset or (((w & 1) or not (w & 3)) and in_gap(a))
+    garm = set()
+    for s0, bb in blocks.items():
+        for o in range((-s0) % 4, len(bb) - 3, 4):
+            if is_insn(s0 + o):
+                continue
+            v = int.from_bytes(bb[o:o + 4], "little")
+            if v & 3 or v in starts or v in eset or v in taken or not in_gap(v):
+                continue
+            nb = [int.from_bytes(bb[p:p + 4], "little") for p in (o - 4, o + 4) if 0 <= p and p + 4 <= len(bb)]
+            if any(codeptr(w) for w in nb):
+                garm.add(v)
+    narm = 0
+    for a in sorted(garm):
+        nxt = los[bisect.bisect_right(los, a)] if bisect.bisect_right(los, a) < len(los) else a + 0x40
+        nxt = min([nxt] + [hi for lo, hi in text if lo <= a < hi])   # (not past its block: no bytes there to decode)
+        insns = decode([(a, min(nxt, a + 0x400) - 1)], True)
+        end = next((k for k, i in enumerate(insns) if (i.mnemonic == "bx" and i.op_str == "lr")
+                    or (i.mnemonic in ("pop", "ldm", "ldmia") and "pc" in i.op_str) or i.mnemonic == "b"), None)
+        if not insns or insns[0].address != a or end is None or junk(insns[:end + 1]) \
+                or any(insns[k].address + insns[k].size != insns[k + 1].address for k in range(end)):
+            continue
+        eset.add(a); narm += 1
+        fns.append(Fn(a, ([(a, min(nxt, a + 0x400) - 1)], True, end + 1), eset, arm=True, lite=insns[:end + 1]))
+    ngap += narm
+    if narm:
+        print(f"{narm} ARM functions in gaps (even pointers in vtable rows), counted below")
     if ngap:
         print(f"{ngap} functions in gaps between Ghidra's bodies (reached through pointers)")
     for a in sorted(set(HOOKS) - {f.entry for f in fns}):   # a typo, or an address that moved: say so now, not after a run shows nothing changed
