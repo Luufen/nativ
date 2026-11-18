@@ -13,6 +13,7 @@ TEST_FRAMES = 600         # bootstrap's headless run length (TEST_FRAMES=<n> for
 [versions."1.00"]
 sha256 = "a6b147f6f36f1ba041d130cb9f7c1fb150e2cd27134a249451bb912beb5c82a7"
 status = "supported"
+FUNCTION_SEEDS = "0x818b2872:thumb 0x818b2896:thumb 0x818b28ba:thumb 0x818b28de:thumb"   # functions the analysis misses, found on runs (KZ-1 bootstrap 2026-11-09); a new copy needs them from its first build (KZ-START 2026-11-18: without them a fresh library stops at frame 4)
 
 # hook candidates (vitarecomp hooks-scan, AUTO-GENERATED, UNVERIFIED): constants this game builds that the
 # runtime's generic IHOOKS replace. Each is a guess until a run shows its effect -- uncomment what holds.
