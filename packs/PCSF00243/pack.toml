@@ -5,7 +5,7 @@ AUTO_GENERATED = "pack-init"
 NAME = "Killzone™ Mercenary"
 ELF = "eboot.bin.elf"
 MODULES = "libc libgxm_es4 libgpu_es4 libfios2 libsceavplayer libscemp4"
-RUN_ENV = "RECOMP_SRGB=1 RECOMP_SSAO=0x1000000:1:24 RECOMP_FSR_SUPPORTED=1 RECOMP_ASPECT_HOOK=1 RECOMP_HUD_DRAWS=2d RECOMP_FRAME_RATES=30,60,120"   # RECOMP_SRGB, RECOMP_SSAO, RECOMP_FSR_SUPPORTED as in the US pack (PCSA00107): without RECOMP_SRGB the level is several times too bright and washed out (owner-confirmed 2026-11-11); FEAT-ALL-01: aspect + frame rates
+RUN_ENV = "RECOMP_SRGB=1 RECOMP_SSAO=0x1000000:1:24 RECOMP_FSR_SUPPORTED=1 RECOMP_ASPECT_HOOK=1 RECOMP_HUD_DRAWS=2d RECOMP_FRAME_RATES=30,60,120 RECOMP_VBLANK_MULTI_SWAP=1 RECOMP_FETCH_BBOX_MAX=24"   # RECOMP_SRGB, RECOMP_SSAO, RECOMP_FSR_SUPPORTED as in the US pack (PCSA00107): without RECOMP_SRGB the level is several times too bright and washed out (owner-confirmed 2026-11-11); FEAT-ALL-01: aspect + frame rates; KZ-120: RECOMP_VBLANK_MULTI_SWAP=1, its missions tick with WaitVblankStartMulti(2) (2-3 edges at 120 otherwise); RECOMP_FETCH_BBOX_MAX=24: FRAGCOLOR copies narrowed for small draws only (the CPU runs of the big ones cost M02 ~1 ms a frame more than their copies, desktop GPU)
 IHOOKS = "0x810c1784:frame_dt 0x810c1b54:frame_dt 0x810c2ce4:frame_dt 0x810db7e4:frame_dt 0x810dd600:frame_dt 0x8112dc66:frame_dt 0x81216326:frame_dt 0x812245ce:frame_dt 0x8134bee4:frame_dt 0x8134c952:frame_dt 0x8139f64c:frame_dt 0x8153ef0c:frame_dt 0x8158bc72:frame_dt 0x815932cc:frame_dt 0x815953e6:frame_dt 0x815cb486:frame_dt 0x815e2556:frame_dt 0x816ebae2:frame_dt 0x8116be86:aspect 0x815b146c:aspect"   # FEAT-ALL-01: hooks-scan candidates, tested by the menu runs
 TEST_FRAMES = 600         # bootstrap's headless run length (TEST_FRAMES=<n> for one run)
 # note: shipped in sce_module/ but not loaded: libface libsmart libult (add to MODULES if the run stubs their imports)
@@ -13,6 +13,7 @@ TEST_FRAMES = 600         # bootstrap's headless run length (TEST_FRAMES=<n> for
 [versions."1.00"]
 sha256 = "a6b147f6f36f1ba041d130cb9f7c1fb150e2cd27134a249451bb912beb5c82a7"
 status = "supported"
+FUNCTION_SEEDS = "0x818b2872:thumb 0x818b2896:thumb 0x818b28ba:thumb 0x818b28de:thumb"   # functions the analysis misses, found on runs (KZ-1 bootstrap 2026-11-09); a new copy needs them from its first build (KZ-START 2026-11-18: without them a fresh library stops at frame 4)
 
 # hook candidates (vitarecomp hooks-scan, AUTO-GENERATED, UNVERIFIED): constants this game builds that the
 # runtime's generic IHOOKS replace. Each is a guess until a run shows its effect -- uncomment what holds.

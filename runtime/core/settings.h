@@ -89,6 +89,7 @@ int settings_int(const char *key, int def);
 double settings_float(const char *key, double def);
 const char *settings_str(const char *key, const char *def, char *buf, int bufsize);   /* copied into buf (the table may change) */
 int settings_has(const char *key);
+int settings_own_has(const char *key);   /* the key is in the game's own file (an override or its own option), not only the shared one */
 void settings_set_int(const char *key, int v);
 void settings_set_float(const char *key, double v);
 void settings_set_str(const char *key, const char *v);

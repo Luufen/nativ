@@ -120,9 +120,11 @@ const char *window_present_mode(void);   /* window.c: vsync, mailbox or immediat
 int display_frame_rate_60(void);         /* display.c: the frame-rate setting */
 int display_frame_rate(void);            /* display.c: the rate the game runs at now (30 | 60 | 120) */
 int display_frame_rates_allowed(void);   /* display.c: the pack's allowed rates, a mask of frame_rates.h FR_* */
+int display_frame_rates_fast(void);      /* display.c: those at which the game runs faster (RECOMP_FRAME_RATES_FAST) */
 int gfx_gpu_fsr_active(void);            /* gfx_gpu.c: FSR upscales the frame */
 /* settings.c */
 int settings_has(const char *key);
+int settings_own_has(const char *key); void settings_set_own(const char *key, const char *v);   /* (settings.h: the game's own file -- a game with fast frame rates keeps its rate there) */
 int settings_int(const char *key, int def);
 double settings_float(const char *key, double def);
 void settings_set_int(const char *key, int v);
@@ -345,7 +347,7 @@ static struct { bool loaded; float fov, view, scen, chr, tcs, gyro_sens, vol; in
 static void prefs_load(void) {
 	if (P.loaded) return;
 	char b[16];
-	P.fov = (float)settings_float("fov", 1.0); P.fr = settings_int("frame_rate", 30);
+	P.fov = (float)settings_float("fov", 1.0); P.fr = fr_setting_for(settings_int("frame_rate", 30), settings_own_has("frame_rate"), display_frame_rates_fast());
 	P.view = (float)settings_float("view_distance", 1.0);
 	P.scen = (float)settings_float("scenery_detail", 1.0);
 	P.chr = (float)settings_float("character_detail", 1.0);
@@ -369,7 +371,8 @@ static bool game_option(const char *name) {
 		if ((p == e || p[-1] == ',' || p[-1] == ' ') && (p[n] == 0 || p[n] == ',' || p[n] == ' ')) return true;
 	return false;
 }
-static void set_frame_rate(int fr) { P.fr = fr; settings_set_int("frame_rate", fr); save_settings(); }
+static void set_frame_rate(int fr) {   /* a game with fast rates keeps its choice to itself (frame_rates.h fr_setting_for) */
+	P.fr = fr; if (display_frame_rates_fast()) { char b[8]; std::snprintf(b, sizeof b, "%d", fr); settings_set_own("frame_rate", b); } else settings_set_int("frame_rate", fr); save_settings(); }
 static void set_tcs(float v) { P.tcs = v; settings_set_float("touch_cursor_speed", v); save_settings(); }
 static void set_gyro(int on) { P.gyro = on != 0; settings_set_int("gyro", P.gyro); save_settings(); }
 static void set_gyro_pose(int flat) { P.gyro_flat = flat != 0; settings_set_str("gyro_pose", flat ? "flat" : "upright"); save_settings(); }
@@ -545,7 +548,12 @@ static void page_game(void) {
 		static const char *const all[3] = {"30##fr", "60##fr", "120##fr"};
 		int l[3], n = fr_list(display_frame_rates_allowed(), l), cur = fr_effective(P.fr, display_frame_rates_allowed()), v = 0;
 		const char *names[3]; for (int i = 0; i < n; i++) { names[i] = all[l[i] >= 120 ? 2 : l[i] >= 60 ? 1 : 0]; if (l[i] == cur) v = i; }
-		if (ui::segmented(names, n, &v)) set_frame_rate(l[v]); }
+		if (ui::segmented(names, n, &v)) set_frame_rate(l[v]);
+		/* a pack's RECOMP_FRAME_RATES_FAST: the rates still offered, with a hint that the game runs faster at them (owner 2026-11-18) */
+		char w[32]; if (fr_fast_words(display_frame_rates_fast(), ui_tr("common.and"), w, sizeof w)) {
+			char h[160]; std::snprintf(h, sizeof h, ui_tr("game.fps_fast"), w);
+			ImGui::PushTextWrapPos(0.0f); ImGui::TextColored(ui::warn, "%s", h); ImGui::PopTextWrapPos();
+		} }
 	{	/* (GAME-LANG) the Vita system language games see (game_lang.h; apputil.c reads it once, at the game's start) */
 		char cur[16]; settings_str("game_lang", "auto", cur, sizeof cur);
 		ui::row(ui_tr("game.lang"), ui_tr("game.lang_help"), note_s("game_lang", ui_tr("mark.after_restart")));
@@ -838,7 +846,7 @@ static void page_help(void) {
 			si.win_w = (int)w; si.win_h = (int)h;
 			si.render_scale = settings_int("render_scale", 1);
 			si.present_mode = window_present_mode();
-			si.frame_rate = settings_int("frame_rate", 30);
+			si.frame_rate = fr_setting_for(settings_int("frame_rate", 30), settings_own_has("frame_rate"), display_frame_rates_fast());
 			cwd[0] = 0; if (char *d = SDL_GetCurrentDirectory()) { snprintf(cwd, sizeof cwd, "%s", d); SDL_free(d); }
 			si.log_dir = cwd;
 			si.home = getenv("USERPROFILE"); if (!si.home || !*si.home) si.home = getenv("HOME");   /* cmd_report's ~ rule */
@@ -1074,7 +1082,11 @@ static void menu_view(void) {
 	if (game_option("character_detail")) { ImGui::TextDisabled("%s", ui_tr("game.chr")); ImGui::SetNextItemWidth(170 * g_ui_scale); if (ui::slider_float("##chr", &P.chr, 1.0f, 8.0f, "%.1fx")) set_chr(P.chr); }
 	if (ImGui::BeginMenu(ui_tr("game.fps"))) {
 		int l[3], n = fr_list(display_frame_rates_allowed(), l), cur = fr_effective(P.fr, display_frame_rates_allowed());
-		for (int i = 0; i < n; i++) if (ImGui::MenuItem(l[i] >= 120 ? ui_tr("bar.fps120") : l[i] >= 60 ? ui_tr("bar.fps60") : "30", nullptr, cur == l[i])) set_frame_rate(l[i]);
+		const int fast = display_frame_rates_fast();
+		for (int i = 0; i < n; i++) {
+			char fl[48]; if (fr_is_fast(l[i], fast)) std::snprintf(fl, sizeof fl, ui_tr("bar.fps_fast"), l[i]);   /* (RECOMP_FRAME_RATES_FAST: the game runs faster there) */
+			if (ImGui::MenuItem(fr_is_fast(l[i], fast) ? fl : l[i] >= 120 ? ui_tr("bar.fps120") : l[i] >= 60 ? ui_tr("bar.fps60") : "30", nullptr, cur == l[i])) set_frame_rate(l[i]);
+		}
 		ImGui::EndMenu();
 	}
 	if (ImGui::BeginMenu(ui_tr("perf.osd"))) {

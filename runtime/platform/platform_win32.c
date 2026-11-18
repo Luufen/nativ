@@ -13,6 +13,7 @@
 #include <wchar.h>
 #include <cpuid.h>
 #include "platform.h"
+#include "win_sleep.h"
 #include <pthread.h>   /* (winpthreads: kernel.c names threads through it, so it has the names) */
 
 /* The reservation: committed whole when the commit limit allows (pages still only become memory when touched),
@@ -151,18 +152,7 @@ uint64_t plat_now_us(void) {   /* (QueryPerformanceCounter: what winpthreads' cl
 	QueryPerformanceCounter(&c);
 	return (uint64_t)(c.QuadPart / f.QuadPart) * 1000000u + (uint64_t)(c.QuadPart % f.QuadPart) * 1000000u / (uint64_t)f.QuadPart;
 }
-#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
-#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
-#endif
-void plat_sleep_ns(uint64_t ns) {
-	static __thread HANDLE timer; static __thread int tried;
-	if (!tried) { tried = 1; timer = CreateWaitableTimerExW(0, 0, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS); }   /* Windows 10 1803+: ~0.5 ms, not the 15.6 ms tick */
-	if (timer) {
-		LARGE_INTEGER due; due.QuadPart = -(LONGLONG)((ns + 99) / 100);   /* relative, 100 ns units */
-		if (SetWaitableTimer(timer, &due, 0, 0, 0, FALSE)) { WaitForSingleObject(timer, INFINITE); return; }
-	}
-	Sleep((DWORD)((ns + 999999) / 1000000));
-}
+void plat_sleep_ns(uint64_t ns) { win_sleep_ns(ns); }   /* win_sleep.h: short sleeps yield to their deadline, longer ones wait a high-resolution timer */
 
 void plat_random(void *buf, size_t n) {   /* the system's own generator (bcrypt.dll, loaded on first use: no import library needed) */
 	typedef LONG (WINAPI *GenRandom)(void *, PUCHAR, ULONG, ULONG);

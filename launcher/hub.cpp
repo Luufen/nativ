@@ -2258,6 +2258,12 @@ static int game_frame_rates(const Game &g) {
 	size_t a = env.find("RECOMP_FRAME_RATES="); if (a == std::string::npos) return fr_allowed(nullptr);
 	return fr_allowed(env.substr(a + 19, env.find(' ', a) - a - 19).c_str());
 }
+/* those at which it runs faster than normal (its pack's RUN_ENV RECOMP_FRAME_RATES_FAST, frame_rates.h fr_fast) */
+static int game_frame_rates_fast(const Game &g) {
+	std::string env = pack_value(pack_read(g_root + "/packs/" + g.id + "/pack.toml"), "RUN_ENV") + " ";
+	size_t a = env.find("RECOMP_FRAME_RATES_FAST="); if (a == std::string::npos) return 0;
+	return fr_fast(env.substr(a + 24, env.find(' ', a) - a - 24).c_str(), game_frame_rates(g));
+}
 static const char *setting_name(const std::string &k) {
 	static const std::pair<const char *, const char *> names[] = {{"render_scale", "Resolution"}, {"fullscreen", "Fullscreen"}, {"aspect_ratio", "Widescreen"},
 		{"hud_layout", "HUD"}, {"aspect", "Picture fit"}, {"frame_rate", "Frame rate"}, {"post_aa", "Anti-aliasing"}, {"sharpen", "Sharpening"},
@@ -2289,9 +2295,11 @@ static void game_settings_modal(void) {
 			any = true;
 			const int allowed = game_frame_rates(*g); int l[3], n = fr_list(allowed, l);
 			Ini sh = ini_load(shared_path()); const std::string *shv = ini_find(sh, "frame_rate");
-			const int cur = fr_effective(atoi(tget(t, "frame_rate", shv ? shv->c_str() : "30").c_str()), allowed);
+			const int fast = game_frame_rates_fast(*g);   /* (fast rates: only this game's own choice counts, frame_rates.h fr_setting_for) */
+			const int cur = fr_effective(atoi(tget(t, "frame_rate", shv && !fast ? shv->c_str() : "30").c_str()), allowed);
 			std::string rates; for (int i = 0; i < n; i++) rates += (i ? ", " : "") + std::to_string(l[i]);
 			std::string expl = "This game allows " + rates + " fps. Above 30 is experimental.";
+			{ char w[32]; if (fr_fast_words(fast, "and", w, sizeof w)) expl += std::string(" It runs faster than normal at ") + w + " fps."; }
 			ui::row("Frame rate", expl.c_str());
 			ImGui::PushID("frame_rate_game");
 			static const char *const all[3] = {"30", "60", "120"}; const char *names[3]; int v = 0;

@@ -328,8 +328,9 @@ static void vb_wait_until(uint64_t target, uint32_t count) {
  * (Multi(2) after SetFrameBuf) took three or four edges a frame: 50-68 ms. sceDisplayWaitSetFrameBuf
  * / Multi(n): n edges after the one the last SetFrameBuf lands on. */
 static void h_wait_vblank(Cpu *c) { vb_wait_until(vb_now() + 1, 1); RET(0); }
+static uint32_t vblank_multi(uint32_t n);   /* (below, with the swap interval) */
 static void h_wait_vblank_multi(Cpu *c) {
-	uint32_t n = A0 ? A0 : 1; if (n > 8) n = 8;
+	uint32_t n = vblank_multi(A0);
 	uint64_t now = vb_now(), base = vb_last_target && vb_last_target + n > now ? vb_last_target : now;
 	if (getenv("RECOMP_VBLANK_TRACE")) { static int k; if (k++ < 40) fprintf(stderr, "    vblank wait multi(%u): last %llu now %llu\n", n, (unsigned long long)vb_last_target, (unsigned long long)now); }
 	vb_wait_until(base + n, n); RET(0);
@@ -358,6 +359,8 @@ static int forced_rate = -1;   /* display_force_frame_rate: a capture's switch (
 void display_force_frame_rate(int fr) { forced_rate = fr; }
 static int fr_allowed_now(void) { static int m = -1; if (m < 0) m = fr_allowed(getenv("RECOMP_FRAME_RATES")); return m; }
 int display_frame_rates_allowed(void) { return fr_allowed_now(); }   /* (overlay.cpp: the rows it offers) */
+int display_frame_rates_fast(void);
+int display_frame_rates_fast(void) { static int m = -1; if (m < 0) m = fr_fast(getenv("RECOMP_FRAME_RATES_FAST"), fr_allowed_now()); return m; }   /* (overlay.cpp: the rates its hint names) */
 static int frame_rate(void) {
 	if (forced_rate >= 0) return fr_effective(forced_rate, FR_30 | FR_60 | FR_120);
 	const int allowed = fr_allowed_now();
@@ -380,7 +383,7 @@ static int frame_rate(void) {
 	static long until = -2;
 	if (until == -2) { const char *e = getenv("RECOMP_FRAME_RATE_UNTIL"); until = e && *e ? atol(e) : -1; }
 	if (until >= 0) return frames < (uint64_t)until ? fr_effective(60, allowed) : 30;
-	int r = fr_effective(env >= 0 ? env : settings_int("frame_rate", 30), allowed);
+	int r = fr_effective(env >= 0 ? env : fr_setting_for(settings_int("frame_rate", 30), settings_own_has("frame_rate"), display_frame_rates_fast()), allowed);   /* (a game with fast rates: only its own choice) */
 	/* RECOMP_MOVIE_30=1 (a pack's): 30 fps while a movie plays (a picture decoded within the last 15 presented frames).
 	 * The movies are 30 fps themselves; what a game times to them in its own updates (Persona 4 Dancing's anime
 	 * cutscenes: their event-script subtitles, one script frame an update) keeps its time */
@@ -392,6 +395,12 @@ int display_frame_rate(void) { return frame_rate(); }   /* 30 | 60 | 120 */
 int display_frame_rate_60(void) { return frame_rate() >= 60; }   /* above 30 (hooks.c: the frame-time hooks on) */
 float display_frame_dt(void) { uint64_t e = __atomic_load_n(clock_fixed() ? &frame_edges_g : &frame_edges, __ATOMIC_RELAXED); return fr_frame_dt(e, vb_grid_rate); }   /* 1/60..1/30 s, 1/120.. at 120 (hooks.c: a game's fixed 1/30 steps above 30 fps) */
 static uint32_t swap_interval(uint32_t n) { return fr_swap_interval(n, frame_rate()); }
+/* WaitVblankStartMulti(n): n edges, or a swap interval when the pack says the game ticks its frames with it
+ * (RECOMP_VBLANK_MULTI_SWAP=1: Killzone Mercenary's Multi(2), frame_rates.h fr_vblank_multi) */
+static uint32_t vblank_multi(uint32_t n) {
+	static int swap = -1; if (swap < 0) { const char *e = getenv("RECOMP_VBLANK_MULTI_SWAP"); swap = e && *e == '1'; }
+	return fr_vblank_multi(n, swap ? frame_rate() : 30, swap);
+}
 static void h_wait_setbuf(Cpu *c) { if (!swap_seen) swap_seen = 1; vb_wait_setbuf(vb_setbuf + 1, 1); RET(0); }
 static void h_wait_setbuf_multi(Cpu *c) { uint32_t n = swap_interval(A0); if (n > swap_seen) swap_seen = n; vb_wait_setbuf(vb_setbuf + n, n); RET(0); }
 
@@ -456,7 +465,7 @@ static void vb_wait_until_cb(Cpu *c, uint64_t target, uint32_t count) {
 }
 static void h_wait_vblank_cb(Cpu *c) { vb_wait_until_cb(c, vb_now() + 1, 1); RET(0); }
 static void h_wait_vblank_multi_cb(Cpu *c) {
-	uint32_t n = A0 ? A0 : 1; if (n > 8) n = 8;
+	uint32_t n = vblank_multi(A0);
 	uint64_t now = vb_now(), base = vb_last_target && vb_last_target + n > now ? vb_last_target : now;
 	vb_wait_until_cb(c, base + n, n); RET(0);
 }

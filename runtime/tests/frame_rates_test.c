@@ -24,6 +24,7 @@ static int fr_grid_hz(int rate) { (void)rate; return 60; }
 static uint64_t fr_grid_period_us(int rate) { (void)rate; return 16667; }
 static uint32_t fr_swap_interval(uint32_t n, int rate) { if (!n) n = 1; if (n > 8) n = 8; return n > 1 && rate >= 60 ? 1 : n; }
 static float fr_frame_dt(uint64_t e, int rate) { (void)rate; return (float)(e < 1 ? 1 : e > 2 ? 2 : e) / 60.0f; }
+static uint32_t fr_vblank_multi(uint32_t n, int rate, int swap) { (void)rate; (void)swap; return n ? (n > 8 ? 8 : n) : 1; }   /* display.c: Multi(n) always n edges */
 #endif
 
 static int checks, failed;
@@ -59,6 +60,11 @@ int main(void) {
 	/* the swap interval */
 	CHECK(fr_swap_interval(2, 30) == 2 && fr_swap_interval(0, 30) == 1 && fr_swap_interval(12, 30) == 8);
 	CHECK(fr_swap_interval(2, 60) == 1 && fr_swap_interval(2, 120) == 1 && fr_swap_interval(1, 120) == 1);
+	/* WaitVblankStartMulti(n): n edges, or with the pack's RECOMP_VBLANK_MULTI_SWAP=1 a swap interval (KZ-120) */
+	CHECK(fr_vblank_multi(2, 120, 0) == 2 && fr_vblank_multi(0, 120, 0) == 1 && fr_vblank_multi(12, 60, 0) == 8);
+	CHECK(fr_vblank_multi(2, 120, 1) == 1 && fr_vblank_multi(2, 60, 1) == 1 && fr_vblank_multi(3, 120, 1) == 1);
+	CHECK(fr_vblank_multi(2, 30, 1) == 2 && fr_vblank_multi(0, 30, 1) == 1);   /* at 30 the game's own interval */
+	CHECK((int)(1000000 / (fr_grid_period_us(120) * fr_vblank_multi(2, 120, 1))) == 120);   /* Killzone's Multi(2) tick at 120 */
 	/* a frame's time */
 	CHECK(near(fr_frame_dt(1, 60), 1.0f / 60) && near(fr_frame_dt(2, 60), 1.0f / 30) && near(fr_frame_dt(5, 60), 1.0f / 30));
 	CHECK(near(fr_frame_dt(1, 120), 1.0f / 120));

@@ -6,6 +6,7 @@ NAME = "LittleBigPlanet™ PlayStation®Vita"
 ELF = "eboot.bin.elf"
 MODULES = "libc libgxm_es4 libgpu_es4 libfios2 libscemp4"
 TEST_FRAMES = 600         # bootstrap's headless run length (TEST_FRAMES=<n> for one run)
+RUN_ENV = "RECOMP_FRAME_RATES=30,60,120 RECOMP_FRAME_RATES_FAST=60,120"   # LBP-120 (2026-11-18): 120 renders (120.5 fps headless) but the game steps once a presented frame -- ~2x fast at 60, ~4x at 120; offered with a hint (owner: "keep 120 as an option, but with a hint in the UI that it will run faster"); default 30
 # note: shipped in sce_module/ but not loaded: libult (add to MODULES if the run stubs their imports)
 
 [versions."1.00"]
