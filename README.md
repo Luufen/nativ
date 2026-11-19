@@ -54,6 +54,7 @@ Phantasy Star Nova and the two Persona Dancing games from PersonaDancingRecomp.
 | Resistance: Burning Skies (US) | PCSA00008 | 1.02 | Yes | up to 120 | not checked yet | 5760×3264 (6×) |
 | Gundam Breaker 3 (Asia) | PCSH00208 | 1.30 | No (tested by Tzeentchnet) | 30 | not checked yet | not checked yet |
 | Phantasy Star Nova (Asia, Chinese) | PCSH00143 | 1.00 | Yes | 30 | not checked yet | not checked yet |
+| Phantasy Star Nova (Japan) | PCSG00351 | 1.05 | Yes | up to 60 | not checked yet | not checked yet |
 
 Most of these packs were made with the fork's porting tools (below): they hold what Nativ needs to build and boot the
 game from your copy, plus frame-rate and widescreen settings found automatically.
@@ -65,7 +66,7 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 ## What's new compared with Project Nativ v0.1.5
 
 **Games**
-- **33 more games** than upstream's 4 (see [Tested games](#tested-games)): they render at **up to 6× the Vita's
+- **34 more games** than upstream's 4 (see [Tested games](#tested-games)): they render at **up to 6× the Vita's
   resolution (4K and beyond)**, 10 of them run at **up to 120 fps** and 7 fill **21:9** widescreen.
 - **A game without a pack still gets a start:** adding it writes a first pack automatically.
 
@@ -73,6 +74,9 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 - **Works with a controller or a touch screen alone**: every page, its own file browser and on-screen keyboard.
 - **Library** with a page per game; finds games in other folders and drives, including a **Vita3K** installation.
 - **Updates, add-ons (DLC) and cheats** per game; **zRIF licences** accepted wherever a `.rif` is asked for.
+- **Data mods (rePatch folders)** per game on its **Mods** page, from a folder or a `.zip`, switched on and off
+  without a rebuild; a mod's files are laid over the game's at run time (a mod's program files are refused). The
+  Arks-Layer English patch for Phantasy Star Nova (Japan) was played this way.
 - **Export** a built game for your own devices: **another Windows PC**, a **Steam Deck** (AppImage) or an **Android**
   phone or tablet (`.apk`). Steam Deck and Android builds run in WSL on Windows and need a one-time toolchain setup
   (`runtime/platform/linux/setup-toolchain.sh`, `runtime/platform/android/setup-toolchain.sh`).
@@ -90,6 +94,8 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 **Picture and sound**
 - **120 fps, widescreen and 4K** in more games.
 - **ATRAC9 and AAC audio**, movies with their soundtrack, smoother sound, fixes for games using FMOD.
+- **Short waits on time on Windows**: a game's brief sleeps with callbacks (and its vblank waits) took up to 16 ms
+  there and cost frames; Phantasy Star Nova (Japan) went from below 30 to 60 fps with this.
 - Many GPU fixes: instanced draws, shader subroutines, more texture and render-target formats.
 
 **The Vita's hardware, without a Vita**
@@ -112,8 +118,8 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 
 - Windows 11 (x64): Soul Sacrifice Delta, Persona 4: Dancing All Night, Tearaway and Resistance: Burning Skies (US
   1.02, also at 60 and 120 fps), Killzone: Mercenary (EU, also at 120 fps) and LittleBigPlanet (30 fps, and the hint
-  shown for 60 / 120) and Phantasy Star Nova (Asia, past character creation, with an in-game save) played from a
-  local build of the same source; for every game, see the Tested column above.
+  shown for 60 / 120) and Phantasy Star Nova (Asia, past character creation, with an in-game save; Japan 1.05 with the
+  English patch as a data mod, at 60 fps) played from a local build of the same source; for every game, see the Tested column above.
 - Steam Deck: Medieval Defenders and Soul Sacrifice Delta, each exported as an AppImage (`vitarecomp export-appimage`).
 - Android (Samsung Galaxy Tab S7, Android 13): AQUA KITTY DX and Soul Sacrifice Delta, each exported as an `.apk`,
   played by touch with picture, sound and movies.
