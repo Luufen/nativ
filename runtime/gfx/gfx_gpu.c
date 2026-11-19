@@ -1734,6 +1734,7 @@ typedef struct {
 	int sampled;                  /* a GPU draw has read it as a texture (target_view): not a CPU readback buffer (see readback_enqueue) */
 	int self_read;                /* a draw of a scene on it sampled the region it was drawing (same_region_read): its scenes start with a download */
 	int cpu_reads;                /* the game read its guest memory on the CPU (the read watch, see readback_enqueue): read back after every scene */
+	uint32_t arm_clock; uint64_t arm_gen;   /* the page write clock when its pages were last read-armed, and its gen then (target_download_to_guest) */
 	uint64_t drawn_frame, prev_drawn_frame;   /* the last two frames (gpu_frame_no) a scene drew into it: drawn every frame, or now and then (skip_lossless) */
 	int alias_in;                 /* this scene began with another target's bytes handed over (target_alias_sync): not its own last frame (skip_lossless) */
 	int cpu_dirty;   /* guest memory was written since the GPU texture was last uploaded (a CPU-fallback draw happened) */
@@ -2181,7 +2182,25 @@ static void target_download_rows(TargetEntry *e, uint32_t y0, uint32_t y1) {
 /* the GPU colour texture -> guest memory, in the game's declared format, exactly as gfx_soft.c's
  * target_write would have stored the same colours (so a CPU-fallback draw, a texture that reads
  * this memory in another format or layout, present and RECOMP_SHOT all see the real bytes) */
+static void target_download_body(TargetEntry *e);
+/* A target the GPU drew into, then left there (read-armed after its scene, readback_enqueue), whose memory the game's
+ * CPU then wrote -- Phantasy Star Nova renders 512x512 targets during a load, then streams BC1 textures into the same
+ * memory: the store reaches the read watch only (a page stamped, "read" reported), the target stays GPU-dirty, and
+ * the textures' first bind brought the target down over them (colour noise on every material there, 2026-11-19). So a
+ * download while the target has had no new GPU content since it was armed keeps the guest bytes of the pages stamped
+ * since (gwatch_keep_*), and the target is then CPU-newer: re-uploaded, merged, before its next GPU use. */
 static void target_download_to_guest(TargetEntry *e) {
+	GwatchKeep *keep = 0;
+	if (e->arm_clock && e->arm_gen == e->gen) { GfxTarget t = target_entry_as_gfx(e); keep = gwatch_keep_begin(e->addr, (uint32_t)gfx_target_bpp(&t) * e->width * e->height, e->arm_clock); }
+	target_download_body(e);
+	const uint32_t kept = gwatch_keep_end(keep);
+	if (kept) {
+		e->cpu_dirty = 1; e->arm_clock = 0;
+		if (trace_sync()) fprintf(stderr, "gpu trace: download target %#x kept %u pages the CPU wrote since its last scene\n", e->addr, kept);
+		{ static int said; if (!said++) fprintf(stderr, "    gpu: target %#x came down to guest memory the game had written since (%u pages kept): its later writes win\n", e->addr, kept); }
+	}
+}
+static void target_download_body(TargetEntry *e) {
 	if (trace_sync()) fprintf(stderr, "gpu trace: download target %#x to guest %s (after %u gpu + %u software draws)\n", e->addr, sync_why, n_gpu_draws, n_fallback);
 	uint64_t tdl0 = us_now(); n_tgt_downloads++;
 	uint32_t npx = e->width * e->height;
@@ -3580,7 +3599,7 @@ static void readback_enqueue(TargetEntry *e) {
 	if (watch) read_watch_marks();
 	if (!e || !e->addr || !e->gpu_dirty) return;
 	if (!all && !e->cpu_reads && ((e->sampled && e->kind != TK_F32) || !maxpx || e->width * e->height > (uint32_t)maxpx)) {
-		if (watch) { GfxTarget g = target_entry_as_gfx(e); gwatch_read_arm(e->addr, (uint32_t)gfx_target_bpp(&g) * e->width * e->height); }
+		if (watch) { GfxTarget g = target_entry_as_gfx(e); e->arm_clock = gwatch_protect(0, 0); e->arm_gen = e->gen; gwatch_read_arm(e->addr, (uint32_t)gfx_target_bpp(&g) * e->width * e->height); }
 		return;
 	}   /* RECOMP_GPU_READBACK_ALL=1 (diagnosis): every scene's target, so guest memory holds what the console's would -- does the game read a target on the CPU the rule above misses? */
 	readbacks_complete(e->addr, e->addr + 1);   /* an older copy of this one first */

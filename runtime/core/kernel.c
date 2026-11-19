@@ -43,6 +43,7 @@
 #define E_ALREADY_SENT          0x80028121u
 #define E_WAIT_TIMEOUT          0x80028005u
 #define E_WAIT_DELETE           0x80028006u
+#define E_WAIT_CANCEL           0x80028007u   /* a wait ended by sceKernelCancelEventFlag */
 #define E_UNKNOWN_THREAD_ID     0x80028021u
 #define E_ILLEGAL_THREAD_ID     0x80028022u
 #define E_NOT_DORMANT           0x80028028u
@@ -853,9 +854,14 @@ static pthread_cond_t *wait_cv(void) { if (!my_cv) { my_cv = malloc(sizeof *my_c
  * object stays allocated, so a stale uid or pointer is an error rather than a crash), and the
  * lightweight ones also indexed by their guest work area */
 #define OBJ_PAGE 1024
-static Obj **obj_pages[1024];
+/* the page directory spans the whole uid space (0x40020001 + 2 * index stays below 0x80000000): uids are never reused, and
+ * a game that creates and deletes lightweight mutexes all the time passed the old 1024 pages (1,048,576 objects) after
+ * about an hour of play -- the index past the directory then read the static after it as a page pointer and stored
+ * through it (a crash at host address 0x1) */
+#define OBJ_DIR (1 << 19)
+static Obj **obj_pages[OBJ_DIR];
 static int nobjs;
-static Obj *obj_at(uint32_t i) { Obj **p = i / OBJ_PAGE < 1024 ? obj_pages[i / OBJ_PAGE] : 0; return p ? p[i % OBJ_PAGE] : 0; }
+static Obj *obj_at(uint32_t i) { Obj **p = i / OBJ_PAGE < OBJ_DIR ? obj_pages[i / OBJ_PAGE] : 0; return p ? p[i % OBJ_PAGE] : 0; }
 typedef struct WorkNode { Obj *o; struct WorkNode *next; } WorkNode;
 static WorkNode *by_work_hash[1 << 16];
 static Obj *new_obj(int kind, uint32_t name, uint32_t attr) {
@@ -864,6 +870,7 @@ static Obj *new_obj(int kind, uint32_t name, uint32_t attr) {
 	o->kind = kind; o->attr = attr;
 	snprintf(o->name, sizeof o->name, "%s", name ? (char *)G(name) : "");
 	klock_take();
+	if (nobjs >= 0x1ffeffff) { fprintf(stderr, "kernel: object uids used up (%d objects made): stopping\n", nobjs); abort(); }   /* (fails loudly: ~600 hours of the fastest creator seen) */
 	o->uid = 0x40020001 + 2 * nobjs;
 	if (!obj_pages[nobjs / OBJ_PAGE]) obj_pages[nobjs / OBJ_PAGE] = calloc(OBJ_PAGE, sizeof(Obj *));
 	obj_pages[nobjs / OBJ_PAGE][nobjs % OBJ_PAGE] = o;
@@ -1310,6 +1317,20 @@ static void h_set_evf(Cpu *c) {
 	RET(0);
 }
 static void h_clear_evf(Cpu *c) { Obj *o = by_uid(A0, EVF); if (!o) { RET(E_UNKNOWN_EVF_ID); return; } pthread_mutex_lock(&o->m); o->bits &= A1; pthread_mutex_unlock(&o->m); RET(0); }   /* (uid, bits to keep) */
+/* sceKernelCancelEventFlag(uid, set pattern, *num waiting threads): every waiter is released with
+ * SCE_KERNEL_ERROR_WAIT_CANCEL, then the pattern becomes the given one (no waiter is left to take it), the count goes
+ * to *num (Vita3K 3ab53c9d sync_primitives.cpp Event::cancel). Unimplemented, it returned 0 and woke nobody: a title
+ * that kicks its worker threads with it (PCSH00143, "Aska" workers waiting for bit 2) hung after its first frame */
+static void h_cancel_evf(Cpu *c) {
+	Obj *o = by_uid(A0, EVF); if (!o) { RET(E_UNKNOWN_EVF_ID); return; }
+	pthread_mutex_lock(&o->m);
+	uint32_t n = 0;
+	for (Waiter *w = o->head, *nx; w; w = nx) { nx = w->next; wake(o, w, E_WAIT_CANCEL); n++; }
+	o->bits = A1;
+	if (A2) WR32(A2, n);
+	pthread_mutex_unlock(&o->m);
+	RET(0);
+}
 static void h_delete_evf(Cpu *c) { h_delete_uid(c, EVF, E_UNKNOWN_EVF_ID); }
 static void h_evf_info(Cpu *c) {   /* (uid, *SceKernelEventFlagInfo 0x38) */
 	Obj *o = by_uid(A0, EVF);
@@ -2229,6 +2250,7 @@ const HleEntry hle_kernel[] = {
 	{"sceKernelOpenSema", h_open_sema}, {"sceKernelCloseSema", h_zero_ok}, {"sceKernelOpenMutex", h_open_mutex}, {"sceKernelCloseMutex", h_zero_ok},
 	{"sceKernelCreateEventFlag", h_create_evf}, {"sceKernelWaitEventFlag", h_wait_evf}, {"sceKernelWaitEventFlagCB", h_wait_evf_cb},
 	{"sceKernelPollEventFlag", h_poll_evf}, {"sceKernelSetEventFlag", h_set_evf}, {"sceKernelClearEventFlag", h_clear_evf},
+	{"sceKernelCancelEventFlag", h_cancel_evf},
 	{"sceKernelDeleteEventFlag", h_delete_evf}, {"sceKernelGetEventFlagInfo", h_evf_info},
 	{"sceKernelGetThreadmgrUIDClass", h_uid_class},
 	{"sceKernelCreateSimpleEvent", h_create_sevent}, {"sceKernelDeleteSimpleEvent", h_delete_sevent}, {"sceKernelWaitEvent", h_wait_sevent}, {"sceKernelWaitEventCB", h_wait_sevent_cb},

@@ -26,6 +26,7 @@ run() {  # run <name> <compile args...>
 
 run kernel_test       $CF -D_GNU_SOURCE $INC kernel_test.c -lpthread -lm
 run timer_test        $CF -D_GNU_SOURCE $INC timer_test.c ../debug/waitstats.c -lpthread -lm
+run guestwatch_test   $CF $INC guestwatch_test.c ../gfx/guestwatch.c ../platform/platform_posix.c -lpthread -ldl
 run input_rec_test    $CF $INC input_rec_test.c ../gfx/input_rec.c
 run gesture_test      $CF $INC -I .. gesture_test.c -lm -lpthread
 run jpeg_test         $CF $INC jpeg_test.c

@@ -1440,11 +1440,36 @@ class Fn:
         """the function's C lines; its full instructions exist only while they are built"""
         self.insns = decode(self.src[0], self.src[1], True, self.src[2])
         self.addrs = set(self.iaddrs)
+        self.prefix, self.rejoin = self.entry_prefix()
+        self.addrs |= {i.address for i in self.prefix}
         try:
             return self._build()
         finally:
-            del self.insns, self.addrs
+            del self.insns, self.addrs, self.prefix, self.rejoin
             self.__dict__.pop("_bt", None)
+
+    def entry_prefix(self):
+        """(instructions, rejoin address) for an entry that lands inside an instruction of the function's own linear
+        decode: the instructions decoded from the entry up to the first address the body's decode also starts an
+        instruction at (rejoin; None when they never meet). ([], None) when the entry starts an instruction.
+        The analysis can give an entry a chunk that overlaps the code before it: the spans merge, the decode runs
+        from the first chunk and a 32-bit Thumb instruction covers the entry, so L_<entry> never existed (PSN-NOVA,
+        PCSH00143 fn_81b688cc: ldr.w at 0x81b688ca, clang "use of undeclared label 'L_81b688cc'"). Called at the
+        entry, the CPU decodes from the entry: so does this prefix, which then continues in the body"""
+        own = {i.address for i in self.insns}
+        if not self.insns or self.entry in own:
+            return [], None
+        span = next(((lo, hi) for lo, hi in self.src[0] if lo <= self.entry <= hi), None)
+        if span is None:
+            return [], None
+        out = []
+        for i in decode([(self.entry, span[1])], self.src[1], True):
+            if i.address in own:
+                return out, i.address
+            if len(out) >= 64:
+                break
+            out.append(i)
+        return out, None
 
     def _build(self):
         lines = [f"void fn_{self.entry:08x}(Cpu *c) {{"]
@@ -1454,7 +1479,12 @@ class Fn:
             lines.append(f"\trecomp_hook_{hook}(c);   /* --hooks: before the body, can change c->r / c->vfp */")
         if self.insns and self.insns[0].address != self.entry:
             lines.append(f"\tgoto L_{self.entry:08x};   /* an entry inside another function's code */")
-        for i in self.insns:
+        body = self.prefix + ([None] if self.prefix else []) + self.insns
+        for i in body:
+            if i is None:   # the end of the entry's own decode: it continues where it meets the body's
+                lines.append(f"\tgoto L_{self.rejoin:08x};   /* the entry's decode meets the body's here */" if self.rejoin is not None
+                             else f"\tUNIMPL(c, 0x{self.prefix[-1].address + self.prefix[-1].size:x}u);   /* the entry's decode never met the body's */")
+                continue
             lines.append(f"L_{i.address:08x}: /* {i.mnemonic} {i.op_str} */")
             lines.append(f"\tTR(0x{i.address:x}u);")
             try:
@@ -1476,7 +1506,7 @@ class Fn:
             return lines
         lines.append("jump:")
         lines.append("\tswitch (c->r[15]) {")
-        for i in self.insns:
+        for i in self.prefix + self.insns:
             lines.append(f"\tcase 0x{i.address:x}u: goto L_{i.address:08x};")
         # a computed jump to another function's entry (a table case that is a split-off entry: libSceFt2's FreeType
         # interpreter, AUTO-01 GR-11) is a tail call: run it and return, as the branch would; anything else asserts
@@ -1656,16 +1686,74 @@ def main():
             a = v & ~1
             if (v & 1) and a not in starts and a not in eset and in_gap(a):
                 gap.add(a)
+    def gap_ends(insns, term):
+        """candidate indexes of a gap function's last instruction, best first: its first return or unconditional b at
+        or past the furthest forward target of its own direct branches inside the decoded span (a switch's cases can
+        sit after the first b -- PSN-NOVA, PCSH00143: fn_8225fa1c "cmp r1,#0; beq 0x8225fa94; ...; b 0x8225fa6c", its
+        cases at 0x8225fa60..0x8225fa94 were cut off and called as externals, a run stopped on the first), then its
+        first return or b (what the pass took before: a caller keeps it when the longer decode has no end or is junk,
+        so no gap function is lost -- a lone "b" trampoline into a big body still is one)"""
+        if not insns:
+            return []
+        far, lo, hi, first, ext = insns[0].address, insns[0].address, insns[-1].address, None, None
+        for k, i in enumerate(insns):
+            m = i.mnemonic.split(".")[0]
+            t = i.op_str.rsplit("#", 1)[-1]   # (the light decode has no operands: a direct branch's target is "#0x...")
+            if (m in ("b", "cbz", "cbnz") or (m[:1] == "b" and m[1:] in COND)) and t.startswith("0x") and lo <= int(t, 16) <= hi:
+                far = max(far, int(t, 16))
+            if term(i):
+                first = k if first is None else first
+                if i.address >= far:
+                    ext = k
+                    break
+        return [e for e in dict.fromkeys((ext, first)) if e is not None]
     ngap = 0
     for a in sorted(gap):
         nxt = los[bisect.bisect_right(los, a)] if bisect.bisect_right(los, a) < len(los) else a + 0x40
         insns = decode([(a, min(nxt, a + 0x400) - 1)], False)
-        end = next((k for k, i in enumerate(insns) if (i.mnemonic == "bx" and i.op_str == "lr")
-                    or (i.mnemonic in ("pop", "pop.w") and "pc" in i.op_str) or i.mnemonic in ("b", "b.w")), None)
-        if not insns or insns[0].address != a or end is None or junk(insns[:end + 1]):
+        end = next((e for e in gap_ends(insns, lambda i: (i.mnemonic == "bx" and i.op_str == "lr")
+                    or (i.mnemonic in ("pop", "pop.w") and "pc" in i.op_str) or i.mnemonic in ("b", "b.w"))
+                    if not junk(insns[:e + 1])), None)
+        if not insns or insns[0].address != a or end is None:
             continue
         eset.add(a); ngap += 1
         fns.append(Fn(a, ([(a, min(nxt, a + 0x400) - 1)], False, end + 1), eset, lite=insns[:end + 1]))
+    # ... and ARM methods the same way: an even, word-aligned pointer into a gap enters ARM code (a blx through it
+    # switches state by the target's bit 0). An even word looks like an address far more often than an odd one does,
+    # so it counts only in a vtable row -- next to another code pointer -- and when its ARM decode runs cleanly to a
+    # return (PSN-NOVA, PCSH00143: class methods such as 0x8203a1ac "ldr/add/str/bx lr" and 0x8204c890 only vtables
+    # reach; each stopped a run on its first call)
+    taken = {x for f in fns[len(fns) - ngap:] for x in f.iaddrs}
+    def codeptr(w):
+        a = w & ~1
+        return a in eset or (((w & 1) or not (w & 3)) and in_gap(a))
+    garm = set()
+    for s0, bb in blocks.items():
+        for o in range((-s0) % 4, len(bb) - 3, 4):
+            if is_insn(s0 + o):
+                continue
+            v = int.from_bytes(bb[o:o + 4], "little")
+            if v & 3 or v in starts or v in eset or v in taken or not in_gap(v):
+                continue
+            nb = [int.from_bytes(bb[p:p + 4], "little") for p in (o - 4, o + 4) if 0 <= p and p + 4 <= len(bb)]
+            if any(codeptr(w) for w in nb):
+                garm.add(v)
+    narm = 0
+    for a in sorted(garm):
+        nxt = los[bisect.bisect_right(los, a)] if bisect.bisect_right(los, a) < len(los) else a + 0x40
+        nxt = min([nxt] + [hi for lo, hi in text if lo <= a < hi])   # (not past its block: no bytes there to decode)
+        insns = decode([(a, min(nxt, a + 0x400) - 1)], True)
+        end = next((e for e in gap_ends(insns, lambda i: (i.mnemonic == "bx" and i.op_str == "lr")
+                    or (i.mnemonic in ("pop", "ldm", "ldmia") and "pc" in i.op_str) or i.mnemonic == "b")
+                    if not junk(insns[:e + 1]) and all(insns[k].address + insns[k].size == insns[k + 1].address
+                                                       for k in range(e))), None)
+        if not insns or insns[0].address != a or end is None:
+            continue
+        eset.add(a); narm += 1
+        fns.append(Fn(a, ([(a, min(nxt, a + 0x400) - 1)], True, end + 1), eset, arm=True, lite=insns[:end + 1]))
+    ngap += narm
+    if narm:
+        print(f"{narm} ARM functions in gaps (even pointers in vtable rows), counted below")
     if ngap:
         print(f"{ngap} functions in gaps between Ghidra's bodies (reached through pointers)")
     for a in sorted(set(HOOKS) - {f.entry for f in fns}):   # a typo, or an address that moved: say so now, not after a run shows nothing changed

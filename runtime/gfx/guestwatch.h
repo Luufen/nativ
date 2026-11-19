@@ -34,6 +34,13 @@ void gwatch_write_end(uint32_t addr, uint32_t len);
 void gwatch_set_read_hook(void (*hook)(uint32_t addr));
 void gwatch_read_arm(uint32_t addr, uint32_t len);
 void gwatch_read_open(uint32_t addr, uint32_t len);
+/* Bytes the CPU may have stored since a clock value, kept across a host write over them: before a host write that
+ * replaces [addr, addr+len) with older content (a GPU render target coming down to guest memory), gwatch_keep_begin
+ * saves the whole pages inside the range stamped after `since` (a store into a read-armed page stamps it, see above);
+ * gwatch_keep_end puts them back and returns how many pages it kept. NULL / 0 when no page qualifies. */
+typedef struct GwatchKeep GwatchKeep;
+GwatchKeep *gwatch_keep_begin(uint32_t addr, uint32_t len, uint32_t since);
+uint32_t gwatch_keep_end(GwatchKeep *k);
 /* counters since the last call (RECOMP_GPU_STATS): write faults taken, bracketed host writes, pages made read-only */
 void gwatch_stats(uint32_t *faults, uint32_t *marks, uint32_t *protects);
 #endif

@@ -128,6 +128,7 @@ import glob
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import struct
@@ -795,17 +796,35 @@ def start_game(argv, **kw):   # subprocess.Popen for a game, with Windows' refus
 def tee_run(argv, env, cwd, log_path):
     """the game, its stderr to the terminal and to log_path (2> >(tee log >&2)): its exit status"""
     sys.stdout.flush()
+    # the terminal copy goes through its own thread: a terminal whose writes block (a Windows console with a selection
+    # held in it, QuickEdit) must stop neither the log nor the game -- the pump writing to it directly stopped reading,
+    # the game then blocked in its next stderr write (frozen) and this never returned once the game was gone
+    err = getattr(sys.stderr, "buffer", None)
+    q = queue.Queue(maxsize=1024) if err else None
+    def mirror():
+        while True:
+            b = q.get()
+            if b is None: return
+            try: err.write(b); err.flush()
+            except (OSError, ValueError): pass
+    if q: threading.Thread(target=mirror, daemon=True).start()
     with open(log_path, "wb") as log:
         p = start_game(argv, env=env, cwd=cwd, stderr=subprocess.PIPE)
         def pump():
-            err = getattr(sys.stderr, "buffer", None)
             for b in iter(lambda: p.stderr.read1(65536) if hasattr(p.stderr, "read1") else p.stderr.read(4096), b""):
                 log.write(b); log.flush()
-                if err: err.write(b); err.flush()
+                if q:
+                    try: q.put_nowait(b)
+                    except queue.Full: pass   # (only the terminal misses it: the log has it)
         t = threading.Thread(target=pump, daemon=True); t.start()
         try: rc = p.wait()
         except KeyboardInterrupt: p.terminate(); rc = p.wait()
         t.join()
+    if q:
+        try: q.put_nowait(None)
+        except queue.Full: pass
+        deadline = time.monotonic() + 2   # (what the terminal still has to show, if it takes it)
+        while not q.empty() and time.monotonic() < deadline: time.sleep(0.02)
     return rc
 
 
@@ -838,7 +857,10 @@ def cmd_run(g, frames):
         rc = subprocess.run(ENV["ATIV_PRE_LAUNCH"], shell=True).returncode
         if rc: sys.exit(rc)
     try:
-        if os.path.isfile(os.path.join(OUT, "session.log")): os.replace(os.path.join(OUT, "session.log"), os.path.join(OUT, "session.prev.log"))
+        if os.path.isfile(os.path.join(OUT, "session.log")):
+            try: os.replace(os.path.join(OUT, "session.log"), os.path.join(OUT, "session.prev.log"))
+            except OSError as x:   # (Windows: still open in another process -- an earlier run of this game that hasn't ended: written over instead)
+                print(f"session.log is still open elsewhere (an earlier run of this game still going?), written over instead of kept as session.prev.log: {x}", file=sys.stderr)
         link_system_fonts(os.path.join(OUT, "fs"))   # (fonts added after the build count too)
         link_addons(g.W, os.path.join(OUT, "fs"))   # (add-ons added or removed after the build too)
         e = game_env(g, g.RUN_ENV.split() + (ENV.get("EXTRA_ENV") or "").split(), fixed)
