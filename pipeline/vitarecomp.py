@@ -59,6 +59,15 @@
   vitarecomp addons    <title>              the title's added add-ons: name, title, version, content id (tab-separated)
   vitarecomp remove-addon <title> <name>    an add-on out of the library (its licence stays kept)
   vitarecomp remove-update <title>          the title's update out of the library: the game alone, imported and built again
+  vitarecomp add-mod   <title> <folder|zip> [--name N] [--any-title]   a data mod as the Vita plugin rePatch takes it
+                                            (ux0:rePatch/<title>/...: loose files read in place of app0's) into
+                                            dump/decrypted/<title>/repatch/<name>; nothing is built -- the game reads it
+                                            from its next start (each run's fs/repatch links there). eboot.bin,
+                                            sce_module/ and .self/.suprx/.elf are left out (the program stays the one the
+                                            pack knows); a mod made for another title id is refused unless --any-title
+  vitarecomp mods      <title>              the title's mods: name, on|off, files (tab-separated)
+  vitarecomp mod-on | mod-off <title> <name>  a mod switched on / off (from the game's next start)
+  vitarecomp remove-mod <title> <name>      a mod out of the library
   vitarecomp import    <title> [<dump dir>] executables (eboot.bin, sce_module/*.suprx; FAGDec
                                             output, or add's decrypted tree) -> verified ELFs; game
                                             data -> fs/app0. No dump dir: the title's own copy, its
@@ -148,6 +157,7 @@ import apk  # noqa: E402
 import appimage  # noqa: E402
 import portable  # noqa: E402
 import bootstrap  # noqa: E402
+import mods  # noqa: E402
 import hookscan  # noqa: E402
 import packconf  # noqa: E402
 from datadir import library_dir  # noqa: E402
@@ -344,6 +354,40 @@ def link_addons(W, fs):
     if os.path.isdir(src) and os.listdir(src):
         if not (is_link and os.path.realpath(link) == os.path.realpath(src)): os.makedirs(fs, exist_ok=True); link_dir(src, link)
     elif is_link: rmtree(link)
+
+
+def link_mods(W, fs):
+    """<fs>/repatch -> the title's data mods (dump/decrypted/<title>/repatch: vitarecomp add-mod), read by the runtime
+    over app0 as the Vita plugin rePatch reads ux0:rePatch/<title> (runtime/core/repatch.h; REPATCH-01). Linked at
+    every start, as link_addons; none added: no link. A real repatch folder in <fs> (put there by hand) is kept."""
+    src, link = os.path.join(W, "repatch"), os.path.join(fs, "repatch")
+    is_link = os.path.islink(link) or _is_junction(link)
+    if os.path.lexists(link) and not is_link: return
+    if os.path.isdir(src) and mods.rows(W):
+        if not (is_link and os.path.realpath(link) == os.path.realpath(src)): os.makedirs(fs, exist_ok=True); link_dir(src, link)
+    elif is_link: rmtree(link)
+
+
+def cmd_mods(T, cmd, args):
+    """add-mod / mods / mod-on / mod-off / remove-mod (REPATCH-01: pipeline/mods.py)"""
+    if not TITLE_RE.match(T or ""): die(f"vitarecomp {cmd} <title> ...")
+    W = os.path.join(DUMP, "decrypted", T)
+    try:
+        if cmd == "add-mod":
+            if not args: die("vitarecomp add-mod <title> <folder|zip> [--name N] [--any-title]")
+            nm = args[args.index("--name") + 1] if "--name" in args and args.index("--name") + 1 < len(args) else ""
+            name, n, ref = mods.add(W, T, args[0], nm, "--any-title" in args, say=say)
+            say(f"{T}: mod {name} added ({n} files{', ' + str(len(ref)) + ' left out' if ref else ''}) -> {os.path.join(W, 'repatch', name)}: the game reads it from its next start")
+        elif cmd == "mods":
+            for n, on, k in mods.rows(W): print(f"{n}	{'on' if on else 'off'}	{k}")
+        elif cmd in ("mod-on", "mod-off"):
+            if not args: die(f"vitarecomp {cmd} <title> <name>")
+            mods.set_on(W, args[0], cmd == "mod-on"); say(f"{T}: mod {args[0]} {'on' if cmd == 'mod-on' else 'off'} from the game's next start")
+        elif cmd == "remove-mod":
+            if not args: die("vitarecomp remove-mod <title> <name>")
+            mods.remove(W, args[0]); say(f"{T}: mod {args[0]} removed")
+    except mods.ModError as e: die(f"{T}: {e}")
+    if os.path.isdir(os.path.join(W, "recomp", "fs")): link_mods(W, os.path.join(W, "recomp", "fs"))
 
 
 def addon_rows(W):
@@ -638,6 +682,7 @@ def cmd_import(g, src):
         if os.path.isdir(os.path.join(src, "data")): shutil.copytree(os.path.join(src, "data"), os.path.join(app0, "data"), symlinks=True, dirs_exist_ok=True)
     link_system_fonts(os.path.join(OUT, "fs"))   # sa0: the console's system fonts, when the library has them
     link_addons(W, os.path.join(OUT, "fs"))   # addcont0: the add-ons the player added (DLC-01)
+    link_mods(W, os.path.join(OUT, "fs"))   # repatch: the player's data mods (REPATCH-01)
     # VERSIONS (packs/<title>/pack.toml): the builds the pack's hooks and addresses were made for -- another version or region
     # would mis-hook, so say so here rather than crash later; which one this is goes to $W/version, for the pack's per-version settings
     if g.VERSIONS:
@@ -863,6 +908,7 @@ def cmd_run(g, frames):
                 print(f"session.log is still open elsewhere (an earlier run of this game still going?), written over instead of kept as session.prev.log: {x}", file=sys.stderr)
         link_system_fonts(os.path.join(OUT, "fs"))   # (fonts added after the build count too)
         link_addons(g.W, os.path.join(OUT, "fs"))   # (add-ons added or removed after the build too)
+        link_mods(g.W, os.path.join(OUT, "fs"))   # (mods too, REPATCH-01)
         e = game_env(g, g.RUN_ENV.split() + (ENV.get("EXTRA_ENV") or "").split(), fixed)
         rc = tee_run(g.exe_argv(os.path.join(OUT, g.EXE)) + [g.BASE + ".img", g.entry(), frames or "100000000000"], e, OUT, os.path.join(OUT, "session.log"))
     finally:
@@ -880,6 +926,7 @@ def fresh_fs(g, td):
     link_dir(os.path.join(g.OUT, "fs", "app0"), os.path.join(td, "fs", "app0"), relative=os.path.join("..", "..", "fs", "app0"))
     link_system_fonts(os.path.join(td, "fs"))
     link_addons(os.path.dirname(g.OUT), os.path.join(td, "fs"))   # (OUT is <W>/recomp)
+    link_mods(os.path.dirname(g.OUT), os.path.join(td, "fs"))
 
 
 def test_timeout(g):   # a scripted run's limit in seconds: TIMEOUT for one run, else the pack's TEST_TIMEOUT, else 300
@@ -1604,6 +1651,7 @@ def main(argv):
     if cmd == "addons": cmd_addons(T); return 0
     if cmd == "remove-addon": cmd_remove_addon(T, argv[2] if len(argv) > 2 else ""); return 0
     if cmd == "remove-update": cmd_remove_update(T); return 0
+    if cmd in ("add-mod", "mods", "mod-on", "mod-off", "remove-mod"): cmd_mods(T, cmd, argv[2:]); return 0
     if cmd == "dist": cmd_dist(T); return 0
     if cmd == "report": cmd_report(T); return 0
     if cmd == "pack-init": cmd_pack_init(T, "--force" in argv[2:]); return 0

@@ -17,7 +17,7 @@
 #include <sys/stat.h>
 #include <vector>
 
-enum { BROWSE_FOLDER, BROWSE_PKG, BROWSE_LICENCE, BROWSE_PUP, BROWSE_CHEATS };   /* (CHEAT-01: a VitaCheat .psv) */
+enum { BROWSE_FOLDER, BROWSE_PKG, BROWSE_LICENCE, BROWSE_PUP, BROWSE_CHEATS, BROWSE_MOD };   /* (CHEAT-01: a VitaCheat .psv; REPATCH-01: a mod, its folder or a .zip) */
 struct BrowseEntry { std::string name; bool dir; };
 
 static inline std::string browse_lower(std::string s) { for (char &c : s) c = (char)tolower((unsigned char)c); return s; }
@@ -29,6 +29,7 @@ static inline bool browse_wants(int kind, const std::string &name) {   /* a file
 	case BROWSE_LICENCE: return browse_ends(l, ".rif") || l == "work.bin" || browse_ends(l, ".txt");   /* (.txt: a zRIF line) */
 	case BROWSE_PUP: return browse_ends(l, ".pup");
 	case BROWSE_CHEATS: return browse_ends(l, ".psv");
+	case BROWSE_MOD: return browse_ends(l, ".zip");
 	default: return false;
 	}
 }

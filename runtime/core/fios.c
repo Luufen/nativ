@@ -34,6 +34,7 @@
 static uint64_t fios_now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000; }
 void io_read_note(int64_t n, uint64_t us, int archive);   /* io.c */
 void host_path_fold(char *buf, size_t root_len);   /* io.c */
+#include "repatch.h"   /* (REPATCH-01) */
 static const char *root(void) { return getenv("RECOMP_FS") ? getenv("RECOMP_FS") : "fs"; }
 static const char *fios_path(uint32_t gp, char *buf, size_t n) {
 	const char *p = (char *)G(gp);
@@ -46,6 +47,7 @@ static const char *fios_path(uint32_t gp, char *buf, size_t n) {
 	} else snprintf(buf, n, "%s/%s", root(), p);   /* "/dev/rest" */
 	for (char *q = buf + strlen(root()); *q; q++) if (*q == '\\') *q = '/';   /* a separator, as io.c */
 	host_path_fold(buf, strlen(root()));   /* names ignoring case, as io.c */
+	repatch_apply(buf, n, root(), host_path_fold);   /* (REPATCH-01) a mod's file in the game's place, as io.c */
 	return buf;
 }
 

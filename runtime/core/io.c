@@ -20,6 +20,7 @@
 #include "hle.h"
 #include "guestwatch.h"
 #include "addcont.h"   /* (DLC-01) the add-ons the player added */
+#include "repatch.h"   /* (REPATCH-01) the player's data mods over app0: */
 #include "settings.h"
 
 /* ---- files: a Vita path "dev:rest" is <RECOMP_FS>/dev/rest on the host (app0: is the game's
@@ -58,6 +59,7 @@ static const char *host_path_s(const char *p, char *buf, size_t n) {
 	} else snprintf(buf, n, "%s/%s", root, p);
 	for (char *q = buf + strlen(root); *q; q++) if (*q == '\\') *q = '/';   /* a separator on the console (exFAT forbids it in names): Uncharted saves "slot_000/saves\checkpoint.bin" */
 	host_path_fold(buf, strlen(root));
+	repatch_apply(buf, n, root, host_path_fold);   /* (REPATCH-01) a mod's file in the game's place */
 	return buf;
 }
 static const char *host_path(uint32_t gp, char *buf, size_t n) { return host_path_s((char *)G(gp), buf, n); }
@@ -82,18 +84,22 @@ static uint32_t sce_err(int e) {
  * or rename the game asks for anywhere is logged. (Uncharted's whole app0 vanished during a gate
  * run on 2026-10-13, cause not found.) A host path is in app0 when it, or for one that doesn't
  * exist yet its folder, resolves under <RECOMP_FS>/app0 -- links and ".." included. */
-int guest_path_readonly(const char *hp) {
-	static char app0[PATH_MAX]; static int have = -1;
-	if (have < 0) { char p[1024]; snprintf(p, sizeof p, "%s/app0", getenv("RECOMP_FS") ? getenv("RECOMP_FS") : "fs"); have = realpath(p, app0) != 0; }
-	if (!have) return 0;
+int guest_path_readonly(const char *hp) {   /* (the player's mods too, REPATCH-01: <RECOMP_FS>/repatch) */
+	static char app0[PATH_MAX], mods[PATH_MAX]; static int have = -1, have_mods;
+	if (have < 0) {
+		char p[1024]; const char *r = getenv("RECOMP_FS") ? getenv("RECOMP_FS") : "fs";
+		snprintf(p, sizeof p, "%s/repatch", r); have_mods = realpath(p, mods) != 0;
+		snprintf(p, sizeof p, "%s/app0", r); have = realpath(p, app0) != 0;
+	}
+	if (!have && !have_mods) return 0;
 	char rp[PATH_MAX];
 	if (!realpath(hp, rp)) {
 		char dir[1024]; snprintf(dir, sizeof dir, "%s", hp);
 		char *sl = strrchr(dir, '/'); if (!sl) return 0;
 		*sl = 0; if (!realpath(dir, rp)) return 0;
 	}
-	size_t n = strlen(app0);
-	return !strncmp(rp, app0, n) && (rp[n] == 0 || rp[n] == '/');
+	size_t n = strlen(app0), m = strlen(mods);
+	return (have && !strncmp(rp, app0, n) && (rp[n] == 0 || rp[n] == '/')) || (have_mods && !strncmp(rp, mods, m) && (rp[m] == 0 || rp[m] == '/'));
 }
 static int readonly_refused(const char *what, const char *gp, const char *hp) {
 	if (!guest_path_readonly(hp)) return 0;

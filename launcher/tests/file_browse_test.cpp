@@ -16,13 +16,14 @@ int main(void) {
 	char tmpl[] = "/tmp/browse_testXXXXXX"; std::string t = mkdtemp(tmpl);
 	mkdir((t + "/ux0").c_str(), 0755); mkdir((t + "/Apps").c_str(), 0755); mkdir((t + "/.cache").c_str(), 0755); mkdir((t + "/$RECYCLE.BIN").c_str(), 0755);
 	touch(t + "/game.pkg"); touch(t + "/Update.PKG"); touch(t + "/licence.rif"); touch(t + "/work.bin"); touch(t + "/PSVUPDAT.PUP");
-	touch(t + "/notes.txt"); touch(t + "/.hidden.pkg"); touch(t + "/PCSB00672.psv");
+	touch(t + "/notes.txt"); touch(t + "/.hidden.pkg"); touch(t + "/PCSB00672.psv"); touch(t + "/English Patch.zip");
 	/* each kind: folders first (no case), then its files; dot- and $-names never */
 	CHECK(names(browse_list(t, BROWSE_FOLDER)) == "Apps/,ux0/");
 	CHECK(names(browse_list(t, BROWSE_PKG)) == "Apps/,ux0/,game.pkg,Update.PKG");
 	CHECK(names(browse_list(t, BROWSE_LICENCE)) == "Apps/,ux0/,licence.rif,notes.txt,work.bin");   /* (ZRIF-01: a .txt may hold a zRIF line) */
 	CHECK(names(browse_list(t, BROWSE_PUP)) == "Apps/,ux0/,PSVUPDAT.PUP");
 	CHECK(names(browse_list(t, BROWSE_CHEATS)) == "Apps/,ux0/,PCSB00672.psv");   /* (CHEAT-01) */
+	CHECK(names(browse_list(t, BROWSE_MOD)) == "Apps/,ux0/,English Patch.zip");   /* (REPATCH-01) */
 	CHECK(browse_list(t + "/nothing-here", BROWSE_PKG).empty());
 	/* parents and joins: drives, the root, trailing slashes, backslashes */
 	CHECK(browse_parent("C:/Games/Vita") == "C:/Games");

@@ -17,7 +17,7 @@
  * ATIV_PREFS=<dir>: the launcher's own files and the shared settings there instead of the user's app folder (a test).
  * ATIV_DUMP=<dir>: the library (games, firmware, licences, builds, saves) there instead of the usual one, library_dir (a
  * fresh library to try setup on; the stages it runs inherit it). ATIV_SHOT=f.ppm (a verification aid, no visible window): renders the hub once into f.ppm and exits;
- * ATIV_SHOT_UI=library|setup:<0-4>|add|settings:<0-2>|game:<title>|more:<title>|content:<title>|cheats:<title>|sac|sac:again picks what is on screen, ATIV_SHOT_SIZE=WxH the size (1280x800),
+ * ATIV_SHOT_UI=library|setup:<0-4>|add|settings:<0-2>|game:<title>|more:<title>|content:<title>|cheats:<title>|mods:<title>|sac|sac:again picks what is on screen, ATIV_SHOT_SIZE=WxH the size (1280x800),
  * ATIV_SHOT_SCAN=<rows> a folder search's results (vitarecomp scan's output) in the Add dialog,
  * ATIV_SHOT_LIBSCAN=<rows> the library folders' search (vitarecomp folders scan's output: "Found in" on the cards);
  * the library folders themselves are <prefs>/library_folders.tsv (ATIV_PREFS=<dir> for a test's).
@@ -719,10 +719,12 @@ static const SDL_DialogFileFilter k_pick_pkg[] = {{"PS Vita game, update or add-
 static const SDL_DialogFileFilter k_pick_licence[] = {{"Licence file (*.rif, work.bin, zRIF *.txt)", "rif;bin;txt"}, {"All files (*.*)", "*"}};
 static const SDL_DialogFileFilter k_pick_pup[] = {{"PS Vita system update (*.PUP)", "pup"}, {"All files (*.*)", "*"}};
 static const SDL_DialogFileFilter k_pick_psv[] = {{"VitaCheat cheat file (*.psv)", "psv"}, {"All files (*.*)", "*"}};
+static const SDL_DialogFileFilter k_pick_mod[] = {{"A mod as a zip (*.zip)", "zip"}, {"All files (*.*)", "*"}};
 static void pick_pkg(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_pkg, 2, BROWSE_PKG); }
 static void pick_licence(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_licence, 2, BROWSE_LICENCE); }
 static void pick_pup(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_pup, 2, BROWSE_PUP); }
 static void pick_psv(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_psv, 2, BROWSE_CHEATS); }
+static void pick_mod(SDL_Window *w, std::string *target) { pick_file(w, target, k_pick_mod, 2, BROWSE_MOD); }   /* (the own browser: a .zip, or Use this folder) */
 static void pick_poll(void) {
 	std::lock_guard<std::mutex> l(g_pick_lock);
 	if (g_pick_done && g_pick_target) *g_pick_target = g_pick_result;
@@ -933,7 +935,7 @@ static void browse_go(const std::string &dir) { g_browse.dir = dir; g_browse.ite
 static bool is_dir(const std::string &p) { struct stat st; return !p.empty() && stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode); }
 static void browse_open(std::string *target, int kind) {
 	g_browse.open = true; g_browse.target = target; g_browse.kind = kind; g_browse.top = GImGui->OpenPopupStack.empty();
-	std::string start = target && !target->empty() ? (kind == BROWSE_FOLDER ? *target : browse_parent(*target)) : g_prefs["browse_last"];
+	std::string start = target && !target->empty() ? (kind == BROWSE_FOLDER || (kind == BROWSE_MOD && is_dir(*target)) ? *target : browse_parent(*target)) : g_prefs["browse_last"];
 	browse_go(is_dir(start) ? start : std::string());
 }
 static std::vector<std::pair<std::string, std::string>> browse_places(void) {   /* (label, folder) */
@@ -963,8 +965,8 @@ static void browser_modal(void) {
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(1.6f * em, 1.3f * em)); ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
 	if (!ImGui::BeginPopupModal("##browse", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove)) { ImGui::PopStyleVar(2); return; }
 	ImGui::PopStyleVar(2);
-	static const char *const titles[] = {"Choose a folder", "Choose the game's PKG", "Choose the licence file", "Choose the system update file"};
-	ui::heading(titles[g_browse.kind >= 0 && g_browse.kind <= 3 ? g_browse.kind : 0], em * 1.4f);
+	static const char *const titles[] = {"Choose a folder", "Choose the game's PKG", "Choose the licence file", "Choose the system update file", "Choose the cheat file", "Choose the mod: its folder or .zip"};
+	ui::heading(titles[g_browse.kind >= 0 && g_browse.kind <= 5 ? g_browse.kind : 0], em * 1.4f);
 	ImGui::PushTextWrapPos(0); ui::muted_wrapped(g_browse.dir.empty() ? "Places" : g_browse.dir.c_str()); ImGui::PopTextWrapPos();
 	dialog_body_begin();
 	bool close = false, going = false; std::string go, pick;
@@ -989,7 +991,7 @@ static void browser_modal(void) {
 	}
 	ImGui::PopStyleVar(2);
 	dialog_body_end();
-	if (g_browse.kind == BROWSE_FOLDER && !g_browse.dir.empty()) {
+	if ((g_browse.kind == BROWSE_FOLDER || g_browse.kind == BROWSE_MOD) && !g_browse.dir.empty()) {   /* (a mod: its folder too) */
 		if (ui::primary_button("Use this folder") || ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) pick = g_browse.dir;   /* (Menu / Options: the screen's main action) */
 		same_line_fits(button_w("Cancel"));
 	}
@@ -998,7 +1000,7 @@ static void browser_modal(void) {
 	dialog_hints();
 	if (!pick.empty()) {
 		if (g_browse.target) *g_browse.target = pick;
-		prefs_set("browse_last", g_browse.kind == BROWSE_FOLDER ? pick : browse_parent(pick));
+		prefs_set("browse_last", is_dir(pick) ? pick : browse_parent(pick));
 		if (g_shot_mode) g_shot_done.push_back("picked " + pick);
 		close = true;
 	}
@@ -3272,6 +3274,29 @@ static void export_modal(void) {
 static std::string g_content_game;   /* (UPD-UI, DLC-01) the game whose "Updates & add-ons" is open; ATIV_SHOT_UI=content:<title> */
 static std::string g_upd_path, g_addon_path, g_addon_lic;
 static std::string g_cheats_game;   /* (CHEAT-01) the game whose Cheats page is open; ATIV_SHOT_UI=cheats:<title> */
+static std::string g_mods_game;   /* (REPATCH-01) the game whose Mods page is open; ATIV_SHOT_UI=mods:<title> */
+/* a game's data mods (REPATCH-01; pipeline/mods.py, runtime/core/repatch.h): dump/decrypted/<title>/repatch/<mod>/, each
+ * off while <mod>.off is beside it -- the runtime reads the ones on from the game's next start, nothing is built */
+struct ModRow { std::string name; bool on; };
+static bool mod_name_ok(const std::string &n) {   /* (mods.py name_ok, repatch.h repatch_name_ok) */
+	if (n.empty() || n.size() > 64 || n[0] == '.' || n.find_first_of("/\:") != std::string::npos) return false;
+	std::string l = n; for (char &c : l) c = (char)tolower((unsigned char)c);
+	return !(l.size() >= 4 && l.compare(l.size() - 4, 4, ".off") == 0);
+}
+static std::string mods_dir(const std::string &id) { return g_dump + "/decrypted/" + id + "/repatch"; }
+static std::vector<ModRow> mod_rows(const std::string &id) {
+	std::vector<ModRow> v; const std::string d = mods_dir(id);
+	if (DIR *dd = opendir(d.c_str())) {
+		while (dirent *e = readdir(dd)) {
+			const std::string n = e->d_name; struct stat st;
+			if (!mod_name_ok(n) || stat((d + "/" + n).c_str(), &st) || !S_ISDIR(st.st_mode)) continue;
+			v.push_back({n, !exists(d + "/" + n + ".off")});
+		}
+		closedir(dd);
+	}
+	std::sort(v.begin(), v.end(), [](const ModRow &a, const ModRow &b) { return a.name < b.name; });   /* (bytewise: the runtime's order) */
+	return v;
+}
 static void game_page_modal(void) {
 	if (g_game_page.empty()) return;
 	const Game *gp = nullptr; for (const Game &x : g_games) if (x.id == g_game_page) gp = &x;
@@ -3341,6 +3366,10 @@ static void game_page_modal(void) {
 		                 + ". Add-ons: " + (g.addons.empty() ? "none added" : std::to_string(g.addons.size()) + " added") + ". Add or remove an update or add-ons you own.";
 		if (action("Updates & add-ons…", expl.c_str(), false, true)) { g_content_game = g.id; close = true; }
 		if (action("Cheats…", "Your own VitaCheat cheat file (.psv) for this game: pick which cheats are on. In the game, its menu (Game) switches them too.", false, true)) { g_cheats_game = g.id; close = true; }
+		{	const int nm = (int)mod_rows(g.id).size();
+			const std::string mx = std::string("Data mods as the Vita plugin rePatch takes them (a translation patch, ...): files read in place of the game's. ") + (nm ? std::to_string(nm) + " added." : "None added.");
+			if (action("Mods (rePatch folder)…", mx.c_str(), false, true)) { g_mods_game = g.id; close = true; }
+		}
 	}
 	if (g.imported && action("Game settings", "This game's own options (field of view, view distance, ...) and the values it keeps apart from the shared Settings.", false, true)) {
 		make_dir(g_dump + "/decrypted/" + g.id + "/recomp"); g_game_settings = g.id; close = true;
@@ -3562,6 +3591,71 @@ static void cheats_modal(void) {
 	dialog_hints();
 	child_dialogs();
 	if (close) { g_cheats_game.clear(); g_psv_path.clear(); g_cheats_err.clear(); ImGui::CloseCurrentPopup(); }
+	ImGui::EndPopup();
+}
+/* ---- a game's data mods (REPATCH-01; the owner, 2026-11-19, about the Arks-Layer English patch for Phantasy Star Nova:
+ * can the launcher take patches like it?): files laid over the game's app0 as the Vita plugin rePatch lays
+ * ux0:rePatch/<title>/ -- each mod the player's own folder or .zip, added with vitarecomp add-mod (its program files
+ * left out, a mod made for another title id refused), switched on or off here at once (repatch/<mod>.off), removed with
+ * vitarecomp remove-mod. The game reads the ones on from its next start; nothing is built (runtime/core/repatch.h). */
+static std::string g_mod_path;
+static void mods_modal(void) {
+	if (g_mods_game.empty()) return;
+	const Game *gp = nullptr; for (const Game &x : g_games) if (x.id == g_mods_game) gp = &x;
+	if (!gp) { g_mods_game.clear(); return; }
+	const Game &g = *gp; const bool busy = g_task.running;
+	const ImGuiViewport *vp = ImGui::GetMainViewport(); const float em = ImGui::GetFontSize();
+	if (!ImGui::IsPopupOpen("##mods")) ImGui::OpenPopup("##mods");
+	ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x < 48 * em ? vp->WorkSize.x * 0.94f : 44 * em, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(1.6f * em, 1.3f * em)); ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	if (!ImGui::BeginPopupModal("##mods", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove)) { ImGui::PopStyleVar(2); return; }
+	ImGui::PopStyleVar(2);
+	ImGui::PushTextWrapPos(0); ui::heading("Mods (rePatch folder)", em * 1.4f); ImGui::TextDisabled("%s  ·  %s", g.name.c_str(), g.id.c_str()); ImGui::PopTextWrapPos();
+	bool close = false;
+	dialog_body_begin();
+	ImGui::PushTextWrapPos(0);
+	const std::vector<ModRow> rows = mod_rows(g.id);
+	if (rows.empty()) ImGui::TextDisabled("No mods for this game yet.");
+	for (const ModRow &m : rows) {
+		ImGui::PushID(m.name.c_str());
+		/* its name and Remove on one line, its switch under them: a controller reaches each with up / down (a switch keeps
+		 * left / right for itself, so a button beside it would be out of reach) */
+		ImGui::AlignTextToFramePadding(); ui::dot(m.on ? ui::accent : ui::muted);
+		if (ui::text_drawable(m.name.c_str())) ImGui::TextUnformatted(m.name.c_str()); else ImGui::TextUnformatted("(a mod)");
+		same_line_fits(button_w("Remove"));
+		ImGui::BeginDisabled(busy);
+		if (small_button("Remove")) content_task(g, "Removing the mod " + m.name + " from " + g.name, "Removing the mod", vitarecomp({"remove-mod", g.id, m.name}));
+		ImGui::EndDisabled();
+		bool on = m.on;
+		const bool first = &m == &rows.front();
+		if (ui::toggle("on", &on)) {   /* (at once: the switch is a file beside the mod) */
+			const std::string off = mods_dir(g.id) + "/" + m.name + ".off";
+			if (on) remove(off.c_str()); else if (FILE *f = fopen(off.c_str(), "wb")) fclose(f);
+		}
+		if (first && ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(-1);   /* (the page opens on the first switch, not on a Remove) */
+		ImGui::Dummy(ImVec2(0, em * 0.2f));
+		ImGui::PopID();
+	}
+	if (rows.size() > 1) ui::muted_wrapped("Several on: for a file more than one has, the first in this list wins.");
+	ImGui::Dummy(ImVec2(0, em * 0.4f));
+	if (path_row("##modpath", g_mod_path, "A mod: its folder or its .zip (rePatch/<title>/..., <title>/... or the files themselves)")) pick_mod(nullptr, &g_mod_path);
+	if (!use_in_app_browser()) {   /* (the system's file dialog picks a file: a folder has its own) */
+		ImGui::PushID("modfolder"); if (small_button("Choose a folder instead…")) pick_folder(nullptr, &g_mod_path); ImGui::PopID();
+	}
+	ImGui::BeginDisabled(busy || g_mod_path.empty());
+	if (ImGui::Button("Add the mod")) { content_task(g, "Adding a mod to " + g.name, "Copying the mod's files", vitarecomp({"add-mod", g.id, g_mod_path})); g_mod_path.clear(); }
+	ImGui::EndDisabled();
+	ui::muted_wrapped("Your own mods: Nativ comes with none. A mod replaces the game's data files only (archives, text, pictures); "
+	                  "its eboot.bin and modules are left out, since Nativ runs the game's program it recognises. A mod made for "
+	                  "another release (another title id, such as the Japanese one) is refused: its files rarely fit this copy. "
+	                  "Switched on or off, a mod counts from the game's next start.");
+	ImGui::PopTextWrapPos();
+	dialog_body_end();
+	if (ImGui::Button("Back") || dialog_back()) close = true;
+	dialog_hints();
+	child_dialogs();
+	if (close) { g_mods_game.clear(); g_mod_path.clear(); ImGui::CloseCurrentPopup(); }
 	ImGui::EndPopup();
 }
 /* ---- the log, copied or saved whole (the activity bar's Copy log / Save log...): for a bug report or a question */
@@ -3924,6 +4018,7 @@ static void hub_ui(SDL_Window *win) {
 	game_page_modal();
 	content_modal();
 	cheats_modal();
+	mods_modal();
 	if (g_browse.top) browser_modal();   /* (one opened with no dialog around it) */
 	if (g_osk.top) osk_modal();
 	{	/* (a press of B this frame that ImGui used to end an edit or close a menu: no dialog takes it next frame either) */
@@ -4390,6 +4485,7 @@ int main(int argc, char **argv) {
 		if (ui_sel.rfind("more:", 0) == 0) g_game_page = ui_sel.substr(5);
 		if (ui_sel.rfind("content:", 0) == 0) g_content_game = ui_sel.substr(8);
 		if (ui_sel.rfind("cheats:", 0) == 0) g_cheats_game = ui_sel.substr(7);
+		if (ui_sel.rfind("mods:", 0) == 0) g_mods_game = ui_sel.substr(5);
 		if (ui_sel.rfind("name:", 0) == 0) g_name_game = ui_sel.substr(5);
 		if (ui_sel == "map:diagram") { g_settings_open = true; g_settings_tab = 1; g_map_type = 0; g_diag_scroll = true; }   /* (UI-02c: the drawing in view) */
 		else if (ui_sel.rfind("map:spot:", 0) == 0) { g_settings_open = true; g_settings_tab = 1; g_map_type = 0; g_spot.open = true; g_spot.spot = atoi(ui_sel.c_str() + 9) % PD_N; }
@@ -4416,7 +4512,7 @@ int main(int argc, char **argv) {
 			static std::string picked_here;
 			const std::string rest = ui_sel.substr(7); const size_t c = rest.find(':');
 			const std::string k = rest.substr(0, c);
-			browse_open(&picked_here, k == "pkg" ? BROWSE_PKG : k == "licence" ? BROWSE_LICENCE : k == "pup" ? BROWSE_PUP : k == "psv" ? BROWSE_CHEATS : BROWSE_FOLDER);
+			browse_open(&picked_here, k == "pkg" ? BROWSE_PKG : k == "licence" ? BROWSE_LICENCE : k == "pup" ? BROWSE_PUP : k == "psv" ? BROWSE_CHEATS : k == "mod" ? BROWSE_MOD : BROWSE_FOLDER);
 			g_browse.top = true; browse_go(c == std::string::npos ? std::string() : rest.substr(c + 1));
 		}
 		if (getenv("ATIV_SHOT_NOFW") && *getenv("ATIV_SHOT_NOFW")) { g_firmware = false; g_firmware_version.clear(); }
