@@ -79,6 +79,9 @@ def decode(spans, arm_mode, detail=False, limit=None):
     return insns if limit is None else insns[:limit]
 
 
+B_MN = re.compile(r"b(eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)?(\.w|\.n)?$")   # B and its conditions
+
+
 def lite_imm(i):
     """the immediate target of a light-decoded branch ("#0x8100abcd"), or None for a register operand"""
     return int(i.op_str[1:], 0) & 0xffffffff if i.op_str.startswith("#") else None
@@ -100,6 +103,10 @@ class Fn:
             lite = decode(*src)
         self.iaddrs = array("I", (i.address for i in lite))
         self.calls = [(i.mnemonic, t) for i in lite if i.mnemonic in ("bl", "blx") and (t := lite_imm(i)) is not None]
+        # plain branches (b, b<cc>, b.w: tail calls) to another analysis entry, as ("b", target): a B never changes
+        # the instruction set, so certain Thumb code's branch target is Thumb like its bl target (PSN-NOVA-JP)
+        self.calls += [("b", t) for i in lite if B_MN.match(i.mnemonic) and (t := lite_imm(i)) is not None
+                       and t != entry and t in entries]
         self.ordered = ORDERED_LOADS[0] and any(i.mnemonic in SYNC_MN for i in lite)
 
     def reg(self, rid):
@@ -1630,7 +1637,10 @@ def main():
     # with "bl" is Thumb, whatever its own decode looks like -- the guess below yields to it (NIGHT-01: Thumb functions
     # whose data read as a coprocessor instruction went ARM; blx targets and the analysis' list stay facts)
     cand = set(todo) | set(maybe_arm)
-    thumb_bl = {t for f in fns if f.entry not in cand for t in calls(f, "bl")}
+    # (a Thumb "b" to an entry keeps the state too -- a tail call; PSN-NOVA-JP, PCSG00351 fn_8102e9dc: its only
+    # reference a Thumb bhs.w, its Thumb decode from a chunk below the entry read as a coprocessor op, the guess made it
+    # ARM and the build failed with an undeclared label)
+    thumb_bl = {t for f in fns if f.entry not in cand for m in ("bl", "b") for t in calls(f, m)}
     for e in maybe_arm:
         if e not in thumb_bl and not junk(decode(fspans[e], True)):
             todo.append(e)
