@@ -113,6 +113,7 @@ void plat_sleep_ns(uint64_t ns) {
 	struct timespec ts = { (time_t)(ns / 1000000000u), (long)(ns % 1000000000u) };
 	while (nanosleep(&ts, &ts) && errno == EINTR) ;
 }
+uint64_t plat_timedwait_slack_us(void) { return 0; }   /* pthread_cond_timedwait wakes at its deadline */
 
 void plat_random(void *buf, size_t n) {
 	FILE *f = fopen("/dev/urandom", "rb");

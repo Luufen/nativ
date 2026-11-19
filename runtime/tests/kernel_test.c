@@ -38,6 +38,10 @@ void guest_time_slept(uint32_t us) { (void)us; }
 void display_vblank_callbacks(void) {}   /* display.c's vblank callbacks: none here */
 uint32_t io_guest_fd(int fd) { return (uint32_t)fd + 0x100; }   /* io.c's handle for a host fd (the standard streams) */
 void plat_random(void *buf, size_t n) { for (size_t i = 0; i < n; i++) ((unsigned char *)buf)[i] = (unsigned char)rand(); }
+/* platform_*.c: the timed-wait slack (Windows 20 ms, POSIX 0) -- a test sets it to run kernel_cb_sleep's short-sleep path */
+static uint64_t test_slack_us;
+uint64_t plat_timedwait_slack_us(void) { return test_slack_us; }
+void plat_sleep_ns(uint64_t ns) { struct timespec ts = { (time_t)(ns / 1000000000u), (long)(ns % 1000000000u) }; while (nanosleep(&ts, &ts) && errno == EINTR) ; }
 /* waitstats.c (RECOMP_WAIT_STATS): off here */
 int waitstats_on(void) { return 0; }
 uint64_t waitstats_now(void) { return 0; }
@@ -577,7 +581,7 @@ static void test_msgpipe(void) {
 /* ================= callbacks and the CB waits */
 static volatile int cb_calls; static uint32_t cb_id, cb_count, cb_arg, cb_common, cb_tid, cb_ret;
 static void cb_fn(Cpu *c) { cb_calls++; cb_id = c->r[0]; cb_count = c->r[1]; cb_arg = c->r[2]; cb_common = c->r[3]; cb_tid = cur_tid; c->r[0] = cb_ret; }
-typedef struct { uint32_t name, cb, sema, result, delay_result; volatile int done, ready; uint64_t t_end; } CbJob;
+typedef struct { uint32_t name, cb, sema, result, delay_result; volatile int done, ready; uint64_t t_end; uint32_t delay_us; } CbJob;
 static void cb_owner(void *p) {   /* creates the callback (so it owns it), then waits with callbacks */
 	CbJob *j = p;
 	j->cb = call(h_create_callback, 4, j->name, 0, 0x1018, 0xbeef);
@@ -585,7 +589,7 @@ static void cb_owner(void *p) {   /* creates the callback (so it owns it), then 
 	j->result = call(h_wait_sema_cb, 3, j->sema, 1, 0);
 	j->done = 1;
 }
-static void cb_delayer(void *p) { CbJob *j = p; j->ready = 1; j->delay_result = call(h_delay_cb, 1, 200000); j->t_end = guest_time_us(); j->done = 1; }
+static void cb_delayer(void *p) { CbJob *j = p; j->ready = 1; j->delay_result = call(h_delay_cb, 1, j->delay_us ? j->delay_us : 200000); j->t_end = guest_time_us(); j->done = 1; }
 static void cb_end_waiter(void *p) { CbJob *j = p; j->ready = 1; j->result = call(h_wait_thread_end_cb, 3, j->sema /* a thread uid here */, 0, 0); j->done = 1; }
 static void test_callbacks(void) {
 	uint32_t name = guest_alloc(16, 4); strcpy((char *)G(name), "cb");
@@ -634,6 +638,22 @@ static void test_callbacks(void) {
 	uint64_t t0 = guest_time_us(); cb_calls = 0;
 	CHECKEQ(call(h_notify_callback, 2, dcb, 3), 0); nap(30); CHECKEQ((uint32_t)cb_calls, 1); CHECKEQ(cb_common, 0x79); CHECK(!d.done);
 	pthread_join(td, 0); CHECKEQ(d.delay_result, 0); CHECK(d.t_end - t0 >= 140000);
+	/* with a timed-wait slack (Windows: winpthreads' timed wait wakes on the 15.6 ms tick -- a DelayThreadCB(200) took
+	 * ~10 ms, PSN-NOVA-JP-60): a delay within the slack sleeps in short precise steps, so it ends on time, and a callback
+	 * notified meanwhile still runs during it; a longer one waits the condition variable for the part beyond the slack */
+	test_slack_us = 20000;
+	{ uint64_t a = guest_time_us(); CHECKEQ(call(h_delay_cb, 1, 200), 0); uint64_t el = guest_time_us() - a; CHECK(el >= 200 && el < 5000); }
+	{ CbJob s = { name, 0, 0 }; s.delay_us = 15000;
+	  pthread_t ts = go(cb_delayer, &s); while (!s.ready) nap(1); nap(3);
+	  Thread *t = 0; for (int i = 0; i < nthreads; i++) if (threads[i].started && !threads[i].done && threads[i].wait_type == 2) t = &threads[i]; CHECK(t != 0);
+	  Obj *o = new_obj(CALLBACK, name, 0); o->owner = t ? t->uid : 0; o->func = 0x1018; o->common = 0x7b;
+	  uint64_t a = guest_time_us(); cb_calls = 0; CHECKEQ(call(h_notify_callback, 2, o->uid, 5), 0);
+	  while (!cb_calls && guest_time_us() - a < 50000) nap(1);
+	  CHECKEQ((uint32_t)cb_calls, 1); CHECKEQ(cb_common, 0x7b); CHECK(!s.done);   /* delivered within the delay */
+	  pthread_join(ts, 0); CHECKEQ(s.delay_result, 0); CHECK(s.t_end - a >= 8000 && s.t_end - a < 40000); }
+	{ CbJob l = { name, 0, 0 }; l.delay_us = 60000; uint64_t a = guest_time_us();
+	  pthread_t tl = go(cb_delayer, &l); pthread_join(tl, 0); CHECKEQ(l.delay_result, 0); CHECK(l.t_end - a >= 60000 && l.t_end - a < 90000); }
+	test_slack_us = 0;
 	/* WaitThreadEndCB likewise */
 	uint32_t s2 = the_sema = call(h_create_sema, 5, name, 0, 0, 1, 0);
 	uint32_t t3 = call(h_create_thread, 7, name, 0x1010, 160, 0x1000, 0, 0, 0);

@@ -1548,6 +1548,17 @@ void kernel_cb_sleep(Cpu *c, uint64_t until_us) {
 		if (until_us <= now) return;
 		uint64_t left = until_us - now;
 		if (in_callbacks) { int b = sched_block_begin(); usleep((useconds_t)left); if (b) sched_block_end(); return; }   /* no nesting: a plain sleep */
+		/* a timed wait that may wake up to `slack` late (Windows: the system tick, plat_timedwait_slack_us) waits only the
+		 * part beyond the slack; the rest goes in short precise sleeps (plat_sleep_ns), each followed by a look for
+		 * callbacks. Before: a game's DelayThreadCB(200) took ~10 ms and its vblank thread's WaitVblankStartCB woke
+		 * 0-30 ms apart -- Phantasy Star Nova's frames took two vblanks at 60 fps (PSN-NOVA-JP-60). */
+		const uint64_t slack = plat_timedwait_slack_us();
+		if (slack && left <= slack) {
+			if (!cb_pending(t)) { int b = sched_block_begin(); plat_sleep_ns((left < 1000 ? left : 1000) * 1000); if (b) sched_block_end(); }
+			else run_callbacks(c);
+			continue;
+		}
+		left -= slack;
 		struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
 		ts.tv_sec += (time_t)(left / 1000000); ts.tv_nsec += (long)((left % 1000000) * 1000);
 		if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }

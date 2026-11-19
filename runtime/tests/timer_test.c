@@ -41,6 +41,8 @@ void guest_time_slept(uint32_t us) { (void)us; }
 void display_vblank_callbacks(void) {}
 uint32_t io_guest_fd(int fd) { return (uint32_t)fd + 0x100; }
 void plat_random(void *buf, size_t n) { for (size_t i = 0; i < n; i++) ((unsigned char *)buf)[i] = (unsigned char)rand(); }
+uint64_t plat_timedwait_slack_us(void) { return 0; }   /* platform_*.c (kernel_cb_sleep) */
+void plat_sleep_ns(uint64_t ns) { struct timespec ts = { (time_t)(ns / 1000000000u), (long)(ns % 1000000000u) }; while (nanosleep(&ts, &ts) && errno == EINTR) ; }
 static GuestFn guest_fns[32];
 GuestFn guest_lookup(uint32_t a) { return a >= 0x1000 && a < 0x1000 + 32 * 4 ? guest_fns[(a - 0x1000) / 4] : 0; }
 

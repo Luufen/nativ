@@ -153,6 +153,9 @@ uint64_t plat_now_us(void) {   /* (QueryPerformanceCounter: what winpthreads' cl
 	return (uint64_t)(c.QuadPart / f.QuadPart) * 1000000u + (uint64_t)(c.QuadPart % f.QuadPart) * 1000000u / (uint64_t)f.QuadPart;
 }
 void plat_sleep_ns(uint64_t ns) { win_sleep_ns(ns); }   /* win_sleep.h: short sleeps yield to their deadline, longer ones wait a high-resolution timer */
+/* winpthreads' pthread_cond_timedwait waits whole milliseconds on the system tick: a 200 us deadline took 1.9-17.6 ms,
+ * median 15.6 ms (llvm-mingw, timeBeginPeriod(1) set; PSN-NOVA-JP-60, 2026-11-19) */
+uint64_t plat_timedwait_slack_us(void) { return 20000; }
 
 void plat_random(void *buf, size_t n) {   /* the system's own generator (bcrypt.dll, loaded on first use: no import library needed) */
 	typedef LONG (WINAPI *GenRandom)(void *, PUCHAR, ULONG, ULONG);

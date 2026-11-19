@@ -8,6 +8,9 @@ ELF = "eboot.bin.elf"
 MODULES = "libc libgxm_es4 libgpu_es4 libfios2 libsceavplayer libpvf libscemp4 libSceFt2"
 TEST_FRAMES = 5400        # the title screen (PCSH00143: "PRESS START BUTTON" from ~f5100, no input)
 TEST_TIMEOUT = 900
+# PSN-NOVA-JP-60 (experimental): the engine paces by an fps field (fn_81a24692: 60 / [obj+0xcc] vblanks a frame)
+# and times its updates by the vblanks elapsed; frames30 makes that field 60 at 60 fps (frame_rates menu)
+RUN_ENV = "RECOMP_FRAME_RATES=30,60"
 # note: shipped in sce_module/ but not loaded: libface libsmart libult (add to MODULES if the run stubs their imports)
 
 [versions."1.05"]
@@ -16,3 +19,4 @@ status = "supported"
 # = PCSH00143 1.00's 0x8204c890 (an ARM vtable function reached only through an even pointer from Thumb code, blx r2,
 # frame 0), mapped by byte signature
 FUNCTION_SEEDS = "0x8209d688:arm"
+IHOOKS = "0x81a246be:frames30"
