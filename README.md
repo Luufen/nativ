@@ -16,8 +16,8 @@ Generic fixes are also offered upstream as pull requests. Problems with these bu
 A pack is a game's settings file: it tells Nativ how to rebuild that game from your copy, which it recognises by the
 SHA-256 of the game's main program. It holds no game code or data. Upstream's four games are unchanged. Frame rate is the highest the game offers in this fork, widescreen the widest picture it fills (16:9: wider screens get black bars at the sides).
 Version is the game release the pack supports. Tested: Yes if this fork ran the game, played or in automated test runs. Every game can render at up to 6× the Vita's 960×544; 4K (4×) was
-checked in the test runs of all of them except Tearaway, LittleBigPlanet, Resistance: Burning Skies and the two Persona
-Dancing games from PersonaDancingRecomp.
+checked in the test runs of all of them except Tearaway, LittleBigPlanet, Resistance: Burning Skies, Gundam Breaker 3,
+Phantasy Star Nova and the two Persona Dancing games from PersonaDancingRecomp.
 
 | Game | Title ID | Version | Tested | Frame rate | Widescreen | Max resolution |
 |---|---|---|---|---|---|---|
@@ -53,6 +53,7 @@ Dancing games from PersonaDancingRecomp.
 | Silent Hill: Book of Memories | PCSB00115 | 1.00 | Yes | not measured yet | not checked yet | 5760×3264 (6×) |
 | Resistance: Burning Skies (US) | PCSA00008 | 1.02 | Yes | up to 120 | not checked yet | 5760×3264 (6×) |
 | Gundam Breaker 3 (Asia) | PCSH00208 | 1.30 | No (tested by Tzeentchnet) | 30 | not checked yet | not checked yet |
+| Phantasy Star Nova (Asia, Chinese) | PCSH00143 | 1.00 | Yes | 30 | not checked yet | not checked yet |
 
 Most of these packs were made with the fork's porting tools (below): they hold what Nativ needs to build and boot the
 game from your copy, plus frame-rate and widescreen settings found automatically.
@@ -64,7 +65,7 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 ## What's new compared with Project Nativ v0.1.5
 
 **Games**
-- **32 more games** than upstream's 4 (see [Tested games](#tested-games)): they render at **up to 6× the Vita's
+- **33 more games** than upstream's 4 (see [Tested games](#tested-games)): they render at **up to 6× the Vita's
   resolution (4K and beyond)**, 10 of them run at **up to 120 fps** and 7 fill **21:9** widescreen.
 - **A game without a pack still gets a start:** adding it writes a first pack automatically.
 
@@ -111,7 +112,8 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 
 - Windows 11 (x64): Soul Sacrifice Delta, Persona 4: Dancing All Night, Tearaway and Resistance: Burning Skies (US
   1.02, also at 60 and 120 fps), Killzone: Mercenary (EU, also at 120 fps) and LittleBigPlanet (30 fps, and the hint
-  shown for 60 / 120) played from a local build of the same source; for every game, see the Tested column above.
+  shown for 60 / 120) and Phantasy Star Nova (Asia, past character creation, with an in-game save) played from a
+  local build of the same source; for every game, see the Tested column above.
 - Steam Deck: Medieval Defenders and Soul Sacrifice Delta, each exported as an AppImage (`vitarecomp export-appimage`).
 - Android (Samsung Galaxy Tab S7, Android 13): AQUA KITTY DX and Soul Sacrifice Delta, each exported as an `.apk`,
   played by touch with picture, sound and movies.

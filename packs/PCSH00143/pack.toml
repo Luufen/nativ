@@ -1,6 +1,7 @@
 # Phantasy Star Nova (PCSH00143, Asia, Chinese; from `vitarecomp pack-init`, then PSN-NOVA 2026-11-18).
-# Checked headless only (no owner run yet): no input, the SEGA logo ~f300, the intro movie ~f600-4500, the title with
-# "PRESS START BUTTON" from ~f5100 (VISUAL_ONLY). Not checked: the menus, a save, gameplay, frame rates above 30.
+# Headless, no input: the SEGA logo ~f300, the intro movie ~f600-4500, the title with "PRESS START BUTTON" from ~f5100.
+# Played on Windows (2026-11-18/19): past character creation into the game, with an in-game save; Circle confirms.
+# Not checked: frame rates above 30, widescreen, resolutions above 1x.
 NAME = "夢幻之星 NOVA"
 REGION = "Asia"
 ELF = "eboot.bin.elf"
