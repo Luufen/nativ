@@ -198,3 +198,31 @@ void gwatch_read_open(uint32_t addr, uint32_t len) {
 void gwatch_stats(uint32_t *faults, uint32_t *marks, uint32_t *protects) {
 	lock(); *faults = n_faults; *marks = n_marks; *protects = n_protects; n_faults = n_marks = n_protects = 0; unlock();
 }
+
+struct GwatchKeep { uint32_t addr, len, n; uint32_t *pages; uint8_t *bytes; };
+GwatchKeep *gwatch_keep_begin(uint32_t addr, uint32_t len, uint32_t since) {
+	if (!len || !gwatch_on()) return 0;
+	const uint64_t ps = 1ull << shift, a = ((uint64_t)addr + ps - 1) & ~(ps - 1), b = ((uint64_t)addr + len) & ~(ps - 1);   /* whole pages only, as gwatch_read_arm */
+	if (b <= a) return 0;
+	const uint32_t p0 = (uint32_t)(a >> shift), p1 = (uint32_t)((b >> shift) - 1);
+	uint32_t n = 0;
+	for (uint32_t p = p0; p <= p1; p++) if ((int32_t)(__atomic_load_n(&pclock[p], __ATOMIC_ACQUIRE) - since) > 0) n++;
+	if (!n) return 0;
+	GwatchKeep *k = malloc(sizeof *k); k->addr = addr; k->len = len; k->n = 0;
+	k->pages = malloc(n * sizeof *k->pages); k->bytes = malloc((size_t)n << shift);
+	for (uint32_t p = p0; p <= p1 && k->n < n; p++) {
+		if ((int32_t)(__atomic_load_n(&pclock[p], __ATOMIC_ACQUIRE) - since) <= 0) continue;   /* (an unstamped read-armed page is not read here: reading it would fault and stamp it) */
+		k->pages[k->n] = p; memcpy(k->bytes + ((size_t)k->n << shift), page_ptr(p), (size_t)ps); k->n++;
+	}
+	return k;
+}
+uint32_t gwatch_keep_end(GwatchKeep *k) {
+	if (!k) return 0;
+	const size_t ps = (size_t)1 << shift; uint32_t n = k->n;
+	for (uint32_t i = 0; i < n; i++) {
+		const uint32_t ga = k->pages[i] << shift;
+		gwatch_write_begin(ga, (uint32_t)ps); memcpy(page_ptr(k->pages[i]), k->bytes + ((size_t)i << shift), ps); gwatch_write_end(ga, (uint32_t)ps);
+	}
+	free(k->pages); free(k->bytes); free(k);
+	return n;
+}
