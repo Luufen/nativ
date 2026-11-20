@@ -103,6 +103,23 @@ int main(void) {
 	check("sceNetHtonl(0x7f000001) -> 0x0100007f", call("sceNetHtonl", 0x7f000001u, 0, 0, 0) == 0x0100007fu);
 	check("sceNetSocketClose(a) -> 0, then EBADF (0x80410109)", call("sceNetSocketClose", a, 0, 0, 0) == 0 && call("sceNetSocketClose", a, 0, 0, 0) == 0x80410109u);
 
+	/* SceNetCtl offline (MC-01): before Init NOT_INITIALIZED; after Init the answers of a console with no connection */
+	const uint32_t ST = 0x25000, CID = 0x25010;
+	WR32(ST, 0xffu);
+	check("sceNetCtlInetGetState before Init -> NOT_INITIALIZED", call("sceNetCtlInetGetState", ST, 0, 0, 0) == 0x80412101u);
+	check("sceNetCtlInit -> 0", call("sceNetCtlInit", 0, 0, 0, 0) == 0);
+	check("sceNetCtlInit again -> NOT_TERMINATED", call("sceNetCtlInit", 0, 0, 0, 0) == 0x80412102u);
+	check("sceNetCtlInetGetState -> 0, DISCONNECTED (was NOT_INITIALIZED)", call("sceNetCtlInetGetState", ST, 0, 0, 0) == 0 && RD32(ST) == 0);
+	WR32(ST, 0xffu);
+	check("sceNetCtlAdhocGetState -> 0, DISCONNECTED", call("sceNetCtlAdhocGetState", ST, 0, 0, 0) == 0 && RD32(ST) == 0);
+	check("sceNetCtlInetGetState(NULL) -> INVALID_ADDR", call("sceNetCtlInetGetState", 0, 0, 0, 0) == 0x80412107u);
+	check("sceNetCtlInetGetInfo(IP_ADDRESS) -> NOT_CONNECTED", call("sceNetCtlInetGetInfo", 15, BUF, 0, 0) == 0x80412108u);
+	WR32(CID, 0);
+	check("sceNetCtlInetRegisterCallback -> 0 and an id", call("sceNetCtlInetRegisterCallback", 0x81000001u, 0, CID, 0) == 0 && RD32(CID) != 0);
+	check("sceNetCtlCheckCallback -> 0", call("sceNetCtlCheckCallback", 0, 0, 0, 0) == 0);
+	check("sceNetCtlInetUnregisterCallback -> 0", call("sceNetCtlInetUnregisterCallback", RD32(CID), 0, 0, 0) == 0);
+	check("sceNetCtlTerm -> 0, then GetState NOT_INITIALIZED", call("sceNetCtlTerm", 0, 0, 0, 0) == 0 && call("sceNetCtlInetGetState", ST, 0, 0, 0) == 0x80412101u);
+
 	printf("%d checks, %d failed\n", checks, fails);
 	if (fails) { printf("FAILED\n"); return 1; }
 	printf("all passed\n");

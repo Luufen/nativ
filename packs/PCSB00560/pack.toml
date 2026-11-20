@@ -1,0 +1,13 @@
+# Minecraft: PlayStation Vita Edition (PCSB00560, EU; MC-01 2026-11-20). Only facts about the game (the format:
+# pipeline/packconf.py). Content id EP4433-PCSB00560_00-MINECRAFTVIT0000. Built from the 1.70 update (it carries the
+# eboot, its own sce_module and the game data); the 1.00 base ships libface/libsmart too, the update does not.
+NAME = "Minecraft: PlayStation Vita Edition"
+REGION = "EU"
+ELF = "eboot.bin.elf"
+MODULES = "libc libgxm_es4 libgpu_es4 libfios2 libult"
+TEST_FRAMES = 3600        # a boot probe toward the title menu (refined once the boot is characterised)
+TEST_TIMEOUT = 900
+
+[versions."1.70"]
+sha256 = "f655cdb3fab342fc992f63b010581258c1dd5e7d3938cb59bf693fcf50dae02d"   # patch0/eboot.bin.elf, measured 2026-11-20
+status = "supported"

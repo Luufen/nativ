@@ -13,6 +13,7 @@
  *             a wait without events waits its timeout (microseconds; negative: until an event).
  *   resolver  no DNS without a network: RESOLVER_ENOHOST (0x804101E6), as net.c answers an unknown name.
  *   helpers   sceNetHtons/Htonl/Htonll and their inverses, sceNetInetPton/Ntop: pure, as online.
+ *   netctl    SceNetCtl of a console with no connection: states DISCONNECTED, info NOT_CONNECTED, callbacks never called.
  *
  * Results follow net.c: 0x80410100 | the BSD errno number, the number also in the thread's sceNetErrnoLoc word.
  * Before: offline every one of these was the generic stub -- 0x80410101 for sockets and byte swaps alike -- and one title's
@@ -300,6 +301,36 @@ static void hn_inet_ntop(Cpu *c) {   /* (af, src, dst, size): dst or 0 */
 	memcpy(G(A2), b, strlen(b) + 1); RET(A2);
 }
 
+/* ---- SceNetCtl: a console with no connection (MC-01). Before: the generic stub -- sceNetCtlInit "succeeded" (0) and the
+ * state queries then answered NOT_INITIALIZED (0x80412101), an answer no console gives after a successful Init; Minecraft's
+ * NP toolkit stopped its set-up there and the main thread called through the object it never made. The error contract is
+ * Vita3K's (3ab53c9d, SceNetCtl.cpp): NOT_INITIALIZED only before Init, NOT_TERMINATED on a second Init, INVALID_ADDR for
+ * a null out pointer. Offline the states are DISCONNECTED (0) and the connection's info is NOT_CONNECTED; callbacks are
+ * registered (ids handed out) and never called: nothing ever connects. */
+enum { NC_NOT_INITIALIZED = 0x80412101u, NC_NOT_TERMINATED = 0x80412102u, NC_INVALID_ADDR = 0x80412107u, NC_NOT_CONNECTED = 0x80412108u };
+static int nc_inited;
+static uint32_t nc_next_cid = 1;
+static void hnc_init(Cpu *c) { if (__atomic_exchange_n(&nc_inited, 1, __ATOMIC_ACQ_REL)) { RET(NC_NOT_TERMINATED); return; } RET(0); }
+static void hnc_term(Cpu *c) { __atomic_store_n(&nc_inited, 0, __ATOMIC_RELEASE); RET(0); }
+static void hnc_state(Cpu *c) {   /* Inet/AdhocGetState(int *state) */
+	if (!__atomic_load_n(&nc_inited, __ATOMIC_ACQUIRE)) { RET(NC_NOT_INITIALIZED); return; }
+	if (!A0) { RET(NC_INVALID_ADDR); return; }
+	WR32(A0, 0); RET(0);   /* SCE_NETCTL_STATE_DISCONNECTED */
+}
+static void hnc_info(Cpu *c) {   /* InetGetInfo(code, info) */
+	if (!__atomic_load_n(&nc_inited, __ATOMIC_ACQUIRE)) { RET(NC_NOT_INITIALIZED); return; }
+	if (!A1) { RET(NC_INVALID_ADDR); return; }
+	RET(NC_NOT_CONNECTED);
+}
+static void hnc_register(Cpu *c) {   /* Inet/AdhocRegisterCallback(func, arg, int *cid) */
+	if (!__atomic_load_n(&nc_inited, __ATOMIC_ACQUIRE)) { RET(NC_NOT_INITIALIZED); return; }
+	if (!A0 || !A2) { RET(NC_INVALID_ADDR); return; }
+	WR32(A2, __atomic_fetch_add(&nc_next_cid, 1, __ATOMIC_RELAXED)); RET(0);
+}
+static void hnc_ok(Cpu *c) {   /* CheckCallback, Inet/AdhocUnregisterCallback */
+	RET(__atomic_load_n(&nc_inited, __ATOMIC_ACQUIRE) ? 0 : NC_NOT_INITIALIZED);
+}
+
 const HleEntry hle_net_offline[] = {
 	{"sceNetInit", hn_init}, {"sceNetTerm", hn_zero}, {"sceNetErrnoLoc", hn_errno_loc},
 	{"sceNetSocket", hn_socket}, {"sceNetSocketClose", hn_close}, {"sceNetBind", hn_bind}, {"sceNetConnect", hn_connect},
@@ -313,5 +344,8 @@ const HleEntry hle_net_offline[] = {
 	{"sceNetHtons", hn_htons}, {"sceNetNtohs", hn_htons}, {"sceNetHtonl", hn_htonl}, {"sceNetNtohl", hn_htonl},
 	{"sceNetHtonll", hn_swap64}, {"sceNetNtohll", hn_swap64},
 	{"sceNetInetPton", hn_inet_pton}, {"sceNetInetNtop", hn_inet_ntop},
+	{"sceNetCtlInit", hnc_init}, {"sceNetCtlTerm", hnc_term}, {"sceNetCtlInetGetState", hnc_state}, {"sceNetCtlAdhocGetState", hnc_state},
+	{"sceNetCtlInetGetInfo", hnc_info}, {"sceNetCtlInetRegisterCallback", hnc_register}, {"sceNetCtlAdhocRegisterCallback", hnc_register},
+	{"sceNetCtlInetUnregisterCallback", hnc_ok}, {"sceNetCtlAdhocUnregisterCallback", hnc_ok}, {"sceNetCtlCheckCallback", hnc_ok},
 	{0, 0},
 };

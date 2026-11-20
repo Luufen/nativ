@@ -43,6 +43,12 @@ int main(void) {
 	 * asserted on the family error and stopped at start-up */
 	check("sceNpWebApiSetNpTitleId", 0, 0);
 	check("sceNpSetNpTitleId", 0, 0);
+	/* set-up too (MC-01, fail-before / pass-after): registering a handler is local; Minecraft's NP toolkit terminated
+	 * itself on the family error and then called through the object it had released */
+	check("sceNpBasicRegisterInGameDataMessageHandler", 0, 0);
+	check("sceNpBasicUnregisterInGameDataMessageHandler", 0, 0);
+	/* not set-up: a handler is not registered by these */
+	check("sceNpBasicSendInGameDataMessage", 0, 0x80550002u);
 	check("sceImeUpdate", 0, 0);
 	check("sceNpManagerGetAccountRegion", 1, 0);
 

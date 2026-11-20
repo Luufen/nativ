@@ -31,7 +31,8 @@ static inline uint32_t stub_family_result(const char *name, int zero) {
 	int setup = stubret_ends(name, nl, "Init") || stubret_ends(name, nl, "Initialize") || stubret_ends(name, nl, "Term")
 	         || stubret_ends(name, nl, "Terminate") || stubret_ends(name, nl, "Shutdown") || stubret_ends(name, nl, "Finalize")
 	         || strstr(name, "Callback") || strstr(name, "RegisterHandler") || strstr(name, "InitWithParam") || strstr(name, "SetParam") || strstr(name, "Create") || strstr(name, "Delete") || strstr(name, "Destroy") || strstr(name, "Abort")
-	         || stubret_ends(name, nl, "SetNpTitleId");   /* (naming the title to NP / its web API: set-up, local) */
+	         || stubret_ends(name, nl, "SetNpTitleId")   /* (naming the title to NP / its web API: set-up, local) */
+	         || (strstr(name, "egister") && stubret_ends(name, nl, "Handler"));   /* (MC-01) (Un)Register<what>Handler: local set-up a console without a connection accepts -- Minecraft's NP toolkit terminated itself when sceNpBasicRegisterInGameDataMessageHandler failed, then called through the object it had released */
 	if (setup || stubret_ends(name, nl, "DialogGetStatus")) return 0;
 	for (int i = 0; stub_errs[i].prefix; i++) if (!strncmp(name, stub_errs[i].prefix, strlen(stub_errs[i].prefix))) return stub_errs[i].err;
 	return 0;
