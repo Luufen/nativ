@@ -886,7 +886,9 @@ def play_fixed_env(g, shipped=None, icon=None):
         ("RECOMP_HITCH_LOG", ENV.get("RECOMP_HITCH_LOG") or "50"), ("RECOMP_STALL_PROF", ENV.get("RECOMP_STALL_PROF") or "150")]
 
 
-def cmd_run(g, frames):
+def cmd_run(g, frames, game_flags=()):
+    """game_flags: the game's own (vitarecomp run <title> -- --fullscreen; the launcher's nativ --play <title> ... --), after
+    its three fixed arguments (runtime/core/main.c reads them)"""
     OUT = g.OUT
     os.makedirs(os.path.join(OUT, "captures"), exist_ok=True)   # F12 in the window saves captures here
     # RUN_ENV: the game's play settings (correctness fixes it needs); TEST_ENV is the gate's and pins the software renderer -- applying it here ran every manual play on the interpreter
@@ -910,7 +912,7 @@ def cmd_run(g, frames):
         link_addons(g.W, os.path.join(OUT, "fs"))   # (add-ons added or removed after the build too)
         link_mods(g.W, os.path.join(OUT, "fs"))   # (mods too, REPATCH-01)
         e = game_env(g, g.RUN_ENV.split() + (ENV.get("EXTRA_ENV") or "").split(), fixed)
-        rc = tee_run(g.exe_argv(os.path.join(OUT, g.EXE)) + [g.BASE + ".img", g.entry(), frames or "100000000000"], e, OUT, os.path.join(OUT, "session.log"))
+        rc = tee_run(g.exe_argv(os.path.join(OUT, g.EXE)) + [g.BASE + ".img", g.entry(), frames or "100000000000"] + list(game_flags), e, OUT, os.path.join(OUT, "session.log"))
     finally:
         if ENV.get("ATIV_POST_EXIT"): subprocess.run(ENV["ATIV_POST_EXIT"], shell=True)
     sys.exit(rc)
@@ -1405,7 +1407,7 @@ def cmd_export_appimage(T, out, rest):
     if not os.path.isfile(icon): icon = os.path.join(ROOT, "assets", "brand", "png", "icon-256.png")
     files.append((os.path.join(ROOT, "assets", "brand", "png", "icon-256.png"), "window-icon.png"))
     env = [tuple(w.partition("=")[::2]) for w in g.RUN_ENV.split() if "=" in w] + play_fixed_env(g, "$APPDIR/game/shaders.txt", "$APPDIR/game/window-icon.png")
-    cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "ProjectNativ", "appimage")
+    cache = os.path.join(os.environ.get("ATIV_CACHE") or os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "ProjectNativ"), "appimage")   # (ATIV_CACHE: the launcher's --data-dir / portable folder's cache)
     stage = os.path.join(cache, f"appdir-{T}")
     appimage.make_appdir(stage, title=T, name=g.NAME, exe=exe, files=files, app0=os.path.realpath(os.path.join(g.W, "app0")),
                          icon=icon, image=g.BASE + ".img", entry=g.entry(), env=env, modules=mods, load_modules=lmods)
@@ -1677,7 +1679,10 @@ def main(argv):
     elif cmd == "recompile": cmd_recompile(g)
     elif cmd == "build": cmd_build(g, arg3)
     elif cmd == "ready": cmd_ready(g)
-    elif cmd == "run": cmd_run(g, arg3)
+    elif cmd == "run":   # run <title> [frames] [-- <the game's own flags>]
+        rest = argv[2:]; flags = rest[rest.index("--") + 1:] if "--" in rest else []
+        rest = rest[:rest.index("--")] if "--" in rest else rest
+        cmd_run(g, rest[0] if rest else "", flags)
     elif cmd == "test": cmd_test(g)
     elif cmd == "capture": cmd_capture(g, arg3)
     elif cmd == "replay":

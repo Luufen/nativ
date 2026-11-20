@@ -82,6 +82,7 @@ inline ImFont *load_system_font(ImGuiIO &io) {
 /* (UI-05) can the face draw every character of s (UTF-8)? A name it can't is better shown another way (the launcher: the
  * game's title id) than as boxes / question marks */
 inline bool text_drawable(const char *s) {
+	if (!ImGui::GetCurrentContext()) return true;   /* (no window: the launcher's command line -- nativ --list, --play -- has no fonts to ask; GetIO would read through null) */
 	ImGuiIO &io = ImGui::GetIO();
 	if (io.Fonts->Fonts.Size == 0) return true;
 	ImFont *f = io.Fonts->Fonts[0];

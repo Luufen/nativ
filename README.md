@@ -21,6 +21,22 @@ Each release has, with `SHA256SUMS` over them:
   `tar xzf ProjectNativ-<tag>-linux.tar.gz`, then run `ProjectNativ/Project Nativ.sh` (Steam: add that file as a
   non-Steam game). Nothing is mounted or unpacked at start.
 
+The launcher is the only program you start. It also takes a command line (`nativ --help`, on Windows
+`"Project Nativ.exe" --help`), for scripts, Steam and other launchers:
+
+| Flag | What it does |
+|---|---|
+| `--list` | The library, one game per line: title, state (`built`, `added`, `pack`), version, name. |
+| `--play <title> [-- <game flags>]` | Starts a game as Play does (built first when needed), without the launcher window. |
+| `--build <title>` | Builds a game in the library. |
+| `--add <folder>` | Searches a folder and adds what's ready (games, updates, add-ons, licences, firmware). |
+| `--data-dir <dir>` | Keeps the library, settings and caches in that folder. |
+| `--fullscreen`, `--windowed` | The launcher window, or with `--play` the game, fullscreen or in a window, this time only. |
+
+Exit status 0 means done, 1 that the work failed, 2 a bad command line or a title that isn't in the library. The game's
+own flags after `--` are `--fullscreen` and `--windowed`. The variables `ATIV_DUMP`, `ATIV_PREFS` and `ATIV_TASK` still
+work.
+
 ## Tested games
 
 A pack is a game's settings file: it tells Nativ how to rebuild that game from your copy, which it recognises by the
