@@ -11,6 +11,16 @@ from a Vita you own, and Sony's firmware update file.
 Generic fixes are also offered upstream as pull requests. Problems with these builds belong in
 [this fork's issues](https://github.com/Luufen/nativ---Updated-30-games-120-widescreen/issues), not upstream's.
 
+## Download and start
+
+Each release has, with `SHA256SUMS` over them:
+
+- **Windows:** `ProjectNativ-<tag>-windows.zip`. Extract the whole zip, then open `ProjectNativ\Project Nativ.exe`.
+- **Linux, Steam Deck:** `ProjectNativ-<tag>-linux.AppImage`: mark it executable and run it.
+- **Linux without FUSE** (or without AppImages): `ProjectNativ-<tag>-linux.tar.gz`, the same install as one folder.
+  `tar xzf ProjectNativ-<tag>-linux.tar.gz`, then run `ProjectNativ/Project Nativ.sh` (Steam: add that file as a
+  non-Steam game). Nothing is mounted or unpacked at start.
+
 ## Tested games
 
 A pack is a game's settings file: it tells Nativ how to rebuild that game from your copy, which it recognises by the
