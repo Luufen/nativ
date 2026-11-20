@@ -71,6 +71,12 @@ int settings_shared_dir(char *buf, int n) {
 	pthread_mutex_unlock(&mx);
 	return ok;
 }
+int settings_game_dir(char *buf, int n) {   /* the game's settings file's folder with its separator ("" = the working directory, the default settings.ini) */
+	pthread_mutex_lock(&mx); const char *f = file[GAME], *sl = strrchr(f, '/'), *bs = strrchr(f, '\\'); if (bs > sl) sl = bs;
+	const int len = sl ? (int)(sl - f) + 1 : 0, ok = len + 2 < n; if (ok) snprintf(buf, (size_t)n, "%.*s", len, f);
+	pthread_mutex_unlock(&mx);
+	return ok;
+}
 int settings_game_option(const char *name) {
 	const char *e = getenv("RECOMP_GAME_OPTIONS"); const size_t n = strlen(name);
 	for (const char *p = e; p && *p; p += strcspn(p, ","), p += *p == ',') if (strcspn(p, ",") == n && !strncmp(p, name, n)) return 1;

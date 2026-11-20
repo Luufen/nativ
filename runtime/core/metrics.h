@@ -86,6 +86,14 @@ int metrics_sampler_running(void);   /* (tests) the machine sampler is alive */
 void metrics_set_gpu_name(const char *name);   /* gfx_gpu.c, when it creates its device: the name the GPU monitor matches */
 /* the 1% and 0.1% lows of n frame times (ms, any order; sorted in place) as fps: the fps of the fastest frame among
  * the slowest 1% (0.1%); -1 both under 100 frames */
+/* the performance log (menu: Performance > Record a performance log; RECOMP_PERF_LOG=1): once a second a CSV line with
+ * the numbers above, in <game folder>/perflog/perf-<date>-<time>.csv, a new file per run, capped at 8 MB. Only numbers
+ * and the machine's own names (CPU, GPU, renderer, resolution): no game data, no paths. */
+int metrics_perflog_on(void);
+void metrics_perflog_set(int on);   /* the menu's toggle (the caller saves the setting "perf_log") */
+int metrics_perflog_path(char *buf, int n);   /* "perflog/<file>" of the current file once it exists (0: none yet) */
+int metrics_costs_wanted(void);   /* the renderer should collect its per-frame costs: the full overlay or the log */
+void metrics_set_window_size(int w, int h);   /* overlay.cpp: the drawable size, for the log */
 void metrics_lows(float *ms, int n, float *low1_fps, float *low01_fps);
 
 #ifdef __cplusplus

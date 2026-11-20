@@ -103,6 +103,7 @@ int settings_reset_all(const char *const *keep);   /* every key of both files go
 extern const char *const settings_default_keep[];   /* exactly those identity keys (settings.c): what the menu's reset
                                                      * passes, so the list cannot drift from what a reset protects */
 int settings_shared_dir(char *buf, int n);   /* the shared file's folder, with its separator (0: none -- a test, or RECOMP_SETTINGS) */
+int settings_game_dir(char *buf, int n);   /* the game's own settings file's folder, with its separator ("": the working directory); 0: buf too small */
 int settings_game_option(const char *name);   /* this game's pack offers that option (RECOMP_GAME_OPTIONS, its RUN_ENV: "fov,online") */
 
 #endif

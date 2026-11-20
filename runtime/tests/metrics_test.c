@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "../core/metrics.c"
 
 /* the symbols metrics.c takes from the rest of the runtime */
@@ -33,6 +34,7 @@ int gfx_gpu_overlay_costs(uint32_t *builds, uint32_t *uploads, uint32_t *skipped
 }
 int settings_has(const char *key) { (void)key; return 0; }
 int settings_int(const char *key, int def) { (void)key; return def; }
+int settings_game_dir(char *buf, int n) { (void)n; buf[0] = 0; return 1; }
 
 static int fails, oks;
 static void check(int ok, const char *what) { printf("%s %s\n", ok ? "ok  " : "FAIL", what); if (ok) oks++; else fails++; }
@@ -144,6 +146,36 @@ int main(void) {
 	check(!metrics_sampler_running(), "leaving the full level stops the machine sampler");
 	metrics_snapshot(&sn);
 	check(sn.machine == 0, "...and the snapshot says its machine numbers are stale");
+#endif
+
+#ifndef FAIL_BEFORE
+	/* the performance log: RECOMP_PERF_LOG_DIR names the folder; switching the setting on writes a header and a line a
+	 * second, switching it off closes the file; nothing but numbers and the machine's names in it */
+	{
+		char dir[128]; snprintf(dir, sizeof dir, "/tmp/perflog_test_%d", (int)getpid()); setenv("RECOMP_PERF_LOG_DIR", dir, 1);
+		check(!metrics_perflog_on() || 1, "perf log state resolvable");
+		metrics_perflog_set(1);
+		check(metrics_perflog_on() == 1 && metrics_costs_wanted(), "the log switch is on and asks the renderer for its costs");
+		for (int i = 0; i < 150; i++) { sleep_ms(20); metrics_game_frame(); }   /* ~3 s */
+		char nm[96] = "", path[256];
+		int have = metrics_perflog_path(nm, sizeof nm);
+		check(have && !strncmp(nm, "perflog/perf-", 13), "the log file is named perflog/perf-<date>-<time>.csv");
+		snprintf(path, sizeof path, "%s/%s", dir, nm + 8);
+		FILE *f = fopen(path, "r"); int hdr = 0, rows = 0, cols_ok = 1, ncol = 0, bad = 0; char ln[1024];
+		while (f && fgets(ln, sizeof ln, f)) {
+			if (ln[0] == '#') { hdr++; if (strstr(ln, "/home") || strstr(ln, "C:\\")) bad = 1; continue; }
+			if (!strncmp(ln, "t_s,", 4)) { ncol = 1; for (char *c = ln; *c; c++) ncol += *c == ','; continue; }
+			int n = 1; for (char *c = ln; *c; c++) n += *c == ','; rows++; if (n != ncol) cols_ok = 0;
+		}
+		if (f) fclose(f);
+		check(f && hdr >= 5, "the log starts with a header (version, CPU, GPU, renderer)");
+		check(rows >= 2 && rows <= 4, "about one line a second");
+		check(ncol >= 30 && cols_ok, "every line has as many fields as the column row");
+		check(!bad, "no paths in the log");
+		metrics_perflog_set(0); sleep_ms(550); metrics_game_frame();
+		check(!metrics_perflog_path(nm, sizeof nm), "switching the log off closes the file");
+		unlink(path); rmdir(dir);
+	}
 #endif
 
 	pthread_mutex_lock(&hold_mx); hold_done = 1; pthread_cond_signal(&hold_cv); pthread_mutex_unlock(&hold_mx);
