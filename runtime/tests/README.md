@@ -349,6 +349,20 @@ USER_CANCELED. Fail-before is the runtime's record: sceNpMessageDialogGetStatus 
 
 It prints `all passed` and exits 0.
 
+## The renderer's draw worker: `gfx_async_test.c`
+
+DECKPERF-02: `gfx_dispatch.c` (built into the test with logging stubs for the backends) queues draws, scene begin/end
+and a scene kick for a worker thread (on by default in a played run; `RECOMP_GFX_ASYNC=0` off, a headless run off
+unless `=1`). The test checks the order on the worker (begin, the draws in submission order, end), that the kick's
+notification lands only after the scene's draws and not at the kick, that a guest-memory hook and present run after
+the queue drained, that `gfx_async_settle` (sceGpuSignalWait) lands a pending kick, that a nested entry point from
+inside the lock returns, and that `RECOMP_GFX_ASYNC=0` and a headless run keep everything on the caller's thread.
+Fail-before: against the tree without the worker it does not build (`gfx_kick_async`, `gfx_async_settle` missing).
+
+    cc -O1 -g -Wall -Wno-unused-function -Wno-unknown-pragmas -D_GNU_SOURCE -I ../core -I ../gfx -I ../audio -I ../media -I ../input -I ../net -I ../ui -I ../platform -I ../debug -I ../../recompiler -I ../.. gfx_async_test.c -lpthread -o /tmp/gfx_async_test && /tmp/gfx_async_test
+
+It prints `gfx_async_test: all checks passed` and exits 0.
+
 ## Small HLE contracts: `hle_small_test.c`
 
 HLE-PORT-01: the pure parts of `sceKernelGetModel` (0x10000 handheld / 0x20000 PS TV, vitasdk sysmem.h),

@@ -58,6 +58,7 @@ run settings_reset_test -O1 -g -Wall -I ../core settings_reset_test.c ../core/se
 run settings_save_test -O1 -g -Wall -I ../core settings_save_test.c ../core/settings.c -lpthread
 run sysinfo_test      -O1 -g -Wall -I ../ui sysinfo_test.c
 run cdlg_test         -O1 -g -Wall -I ../core cdlg_test.c
+run gfx_async_test   -O1 -g -Wall -Wno-unused-function -Wno-unknown-pragmas -D_GNU_SOURCE $INC gfx_async_test.c -lpthread   # DECKPERF-02: the renderer draw worker
 run imedlg_test       -O1 -g -Wall -I ../core imedlg_test.c ../core/imedlg.c -lpthread
 run addcont_test      -O1 -g -Wall -I ../core addcont_test.c
 run cheats_test       -O1 -g -Wall -I ../core cheats_test.c
