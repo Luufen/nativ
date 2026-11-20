@@ -535,6 +535,10 @@ static void page_performance(void) {
 		const char *names[3] = {tr_suf(ui_tr("common.off"), "##osd", t0, sizeof t0), tr_suf("FPS", "##osd", t1, sizeof t1),
 		                        tr_suf(ui_tr("perf.osd_full"), "##osd", t2, sizeof t2)};
 		int lvl = metrics_osd_level(); if (ui::segmented(names, 3, &lvl)) set_osd(lvl); }
+	ui::row("Record a performance log", "Writes a line a second (frame times, CPU, GPU, renderer) to a text file in the game's folder, a new file per run. For finding out why a game is slow; it holds no game data.");
+	{	bool on = metrics_perflog_on() != 0;
+		if (ui::toggle("perflog", &on)) { metrics_perflog_set(on); settings_set_int("perf_log", on ? 1 : 0); settings_save(); }
+		char f[96]; if (on && metrics_perflog_path(f, sizeof f)) ImGui::TextDisabled("Writing to: %s", f); }
 	ui::row(ui_tr("perf.fps_now"));
 	{ char b[32]; std::snprintf(b, sizeof b, "%.0f fps", metrics_fps()); ImGui::PushFont(nullptr, ImGui::GetFontSize() * 1.6f); ImGui::TextUnformatted(b); ImGui::PopFont(); }
 	ui::rows_end();
@@ -2017,6 +2021,7 @@ void overlay_frame(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, uint32_t w
 	render_frame(cmd, target, w, h, dt_s, g_has_window, g_quit_card ? build_quit : g_layout_card ? build_layout : g_prep_card ? build_prep : build_ui);
 }
 void overlay_marks(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, uint32_t w, uint32_t h, double dt_s, const OverlayMark *marks, int n, const float rear_rect[4]) {
+	metrics_set_window_size((int)w, (int)h);
 	if (overlay_is_open()) return;   /* the menu has its own fps line (page_performance) */
 	g_nosd = metrics_osd_lines(g_osd, 6);
 	g_nft = g_nosd > 1 ? metrics_frame_times(g_ft, 240) : 0;   /* more than one line: the full level */

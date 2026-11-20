@@ -15,6 +15,11 @@ int metrics_on(void);   /* anything reading the numbers (a window, RECOMP_METRIC
 void metrics_add_render(uint64_t us);
 void metrics_add_scene(void);
 void metrics_add_draw(void);
+/* (DECKPERF-01) while costs are collected (metrics_costs_wanted): gfx_dispatch.c's timed entry points' wait for the renderer
+ * lock (part of render time), and the window thread's hold of that lock (its present under it) -- performance log columns */
+void metrics_add_lock_wait(uint64_t us);
+void metrics_add_window_lock(uint64_t us);
+void metrics_add_window_acquire(uint64_t us);   /* window.c: its swapchain acquire's wait (vsync, or a compositor's pacing) */
 void metrics_set_backend(int gpu);
 void metrics_set_render_scale(int n);   /* the GPU backend's internal resolution multiplier (gfx_gpu.c RECOMP_RENDER_SCALE / F2), shown with the backend */
 
@@ -86,6 +91,14 @@ int metrics_sampler_running(void);   /* (tests) the machine sampler is alive */
 void metrics_set_gpu_name(const char *name);   /* gfx_gpu.c, when it creates its device: the name the GPU monitor matches */
 /* the 1% and 0.1% lows of n frame times (ms, any order; sorted in place) as fps: the fps of the fastest frame among
  * the slowest 1% (0.1%); -1 both under 100 frames */
+/* the performance log (menu: Performance > Record a performance log; RECOMP_PERF_LOG=1): once a second a CSV line with
+ * the numbers above, in <game folder>/perflog/perf-<date>-<time>.csv, a new file per run, capped at 8 MB. Only numbers
+ * and the machine's own names (CPU, GPU, renderer, resolution): no game data, no paths. */
+int metrics_perflog_on(void);
+void metrics_perflog_set(int on);   /* the menu's toggle (the caller saves the setting "perf_log") */
+int metrics_perflog_path(char *buf, int n);   /* "perflog/<file>" of the current file once it exists (0: none yet) */
+int metrics_costs_wanted(void);   /* the renderer should collect its per-frame costs: the full overlay or the log */
+void metrics_set_window_size(int w, int h);   /* overlay.cpp: the drawable size, for the log */
 void metrics_lows(float *ms, int n, float *low1_fps, float *low01_fps);
 
 #ifdef __cplusplus

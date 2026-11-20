@@ -38,6 +38,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include "metrics.h"
 #include "platform.h"
 
@@ -50,7 +52,8 @@ int metrics_on(void) {
 	static int on = -1;
 	if (on < 0) {
 		const char *m = getenv("RECOMP_METRICS"), *o = getenv("RECOMP_OSD"), *h = getenv("RECOMP_HEADLESS");
-		on = (m && *m && *m != '0') || (o && *o) || !(h && *h && *h != '0');
+		const char *pl = getenv("RECOMP_PERF_LOG");
+		on = (m && *m && *m != '0') || (o && *o) || (pl && *pl && *pl != '0') || !(h && *h && *h != '0');
 	}
 	return on;
 }
@@ -63,6 +66,16 @@ static int backend_gpu;   /* 0 soft, 1 gpu; metrics_set_backend's only writer, s
 void metrics_add_render(uint64_t us) { __atomic_add_fetch(&acc_render_us, us, __ATOMIC_RELAXED); }
 void metrics_add_scene(void) { __atomic_add_fetch(&acc_scenes, 1, __ATOMIC_RELAXED); }
 void metrics_add_draw(void) { __atomic_add_fetch(&acc_draws, 1, __ATOMIC_RELAXED); }
+static uint64_t acc_lock_wait_us, acc_win_lock_us, acc_win_acq_us;
+void metrics_add_lock_wait(uint64_t us) { __atomic_add_fetch(&acc_lock_wait_us, us, __ATOMIC_RELAXED); }
+void metrics_add_window_lock(uint64_t us) { __atomic_add_fetch(&acc_win_lock_us, us, __ATOMIC_RELAXED); }
+void metrics_add_window_acquire(uint64_t us) { __atomic_add_fetch(&acc_win_acq_us, us, __ATOMIC_RELAXED); }
+/* (DECKPERF-01) the performance log's renderer breakdown, ms per game frame over the last tick: the lock wait and hold above,
+ * the window's swapchain acquire wait (window.c), then gfx_gpu_perf_steps' draw-path steps (gfx.h GFX_PERF_*) and what the steps leave of their total. -1: not collected */
+#define PL_STEPS 12
+enum { PL_LOCK_WAIT, PL_WIN_LOCK, PL_WIN_ACQ, PL_GPU0, PL_OTHER = PL_GPU0 + PL_STEPS, PL_N };
+static const char *const pl_names = "lock_wait_ms,window_lock_ms,acquire_ms,draw_path_ms,setup_ms,vfetch_ms,shader_ms,pipe_ms,vbuf_ms,bind_ms,texhash_ms,texup_ms,scene_sync_ms,pass_ms,submit_ms,other_ms";
+static uint64_t pl_acc[PL_N]; static uint32_t pl_frames, pl_gpu_frames; static float pl_ms[PL_N] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 void metrics_set_backend(int gpu) { __atomic_store_n(&backend_gpu, gpu, __ATOMIC_RELAXED); }
 static int render_scale = 1;
 void metrics_set_render_scale(int n) { __atomic_store_n(&render_scale, n, __ATOMIC_RELAXED); }
@@ -197,6 +210,21 @@ void metrics_lows(float *ms, int n, float *low1_fps, float *low01_fps) {
 
 static MetricsSnapshot snap;   /* guarded by mx: maybe_tick writes the frame and renderer parts, the sampler the machine's */
 static char gpu_name_v[96];
+static int perflog_v = -1;   /* -1: not resolved; the environment over the game's settings.ini ("perf_log"), like the overlay level */
+int metrics_perflog_on(void) {
+	int v = __atomic_load_n(&perflog_v, __ATOMIC_RELAXED);
+	if (v < 0) {
+		extern int settings_has(const char *key); extern int settings_int(const char *key, int def);
+		const char *e = getenv("RECOMP_PERF_LOG");
+		v = e && *e ? *e != '0' : settings_has("perf_log") ? settings_int("perf_log", 0) != 0 : 0;
+		__atomic_store_n(&perflog_v, v, __ATOMIC_RELAXED);
+	}
+	return v;
+}
+void metrics_perflog_set(int on) { __atomic_store_n(&perflog_v, on ? 1 : 0, __ATOMIC_RELAXED); }
+int metrics_costs_wanted(void) { return metrics_osd_level() == 2 || metrics_perflog_on(); }
+static int win_w, win_h;
+void metrics_set_window_size(int w, int h) { win_w = w; win_h = h; }   /* (two ints, read once a second: no lock) */
 void metrics_set_gpu_name(const char *name) { pthread_mutex_lock(&mx); snprintf(gpu_name_v, sizeof gpu_name_v, "%s", name ? name : ""); pthread_mutex_unlock(&mx); }
 
 /* the renderer's per-frame work while the full level shows (gfx_gpu.c's frame costs), summed until the next tick */
@@ -212,7 +240,7 @@ static void *sampler(void *arg) {
 	pthread_mutex_lock(&mx); char want[96]; snprintf(want, sizeof want, "%s", gpu_name_v); pthread_mutex_unlock(&mx);
 	PlatGpuMon *gm = plat_gpu_open(want);
 	uint64_t pb = 0, pt = 0, pwall = 0; double pgame = 0; int have = 0, ncpu = plat_cpu_count();
-	while (metrics_osd_level() == 2) {
+	while (metrics_costs_wanted()) {
 		uint64_t busy = 0, total = 0, used = 0, tot = 0; int sys = plat_system_cpu(&busy, &total), mem = plat_mem_info(&used, &tot);
 		double game = plat_cpu_seconds(); uint64_t wall = now_us();
 		PlatGpuSample g; plat_gpu_sample(gm, &g);
@@ -464,6 +492,51 @@ static uint64_t last_tick_us, last_report_us;
 static char line_title[160];
 static uint64_t last_title_emit_us;
 
+/* ---- the performance log: a CSV file per run, a line a second while the setting is on. Written from maybe_tick under mx. */
+#define PERFLOG_CAP (8u << 20)
+static FILE *plog; static unsigned long plog_bytes; static int plog_dead;   /* plog_dead: opening failed or the cap was hit: stay quiet for the run */
+static char plog_name[96]; static uint64_t plog_t0, last_plog_us;
+extern int settings_game_dir(char *buf, int n);
+int metrics_perflog_path(char *buf, int n) { pthread_mutex_lock(&mx); int ok = plog && plog_name[0]; if (ok) snprintf(buf, (size_t)n, "%s", plog_name); pthread_mutex_unlock(&mx); return ok; }
+static void plog_open(uint64_t now) {
+	char dir[600] = "", path[700]; time_t tt = time(0); struct tm tm; localtime_r(&tt, &tm);
+	const char *ovr = getenv("RECOMP_PERF_LOG_DIR");   /* (tests, and a place of the user's choice) */
+	if (ovr && *ovr) snprintf(dir, sizeof dir, "%s%s", ovr, ovr[strlen(ovr) - 1] == '/' || ovr[strlen(ovr) - 1] == '\\' ? "" : "/");
+	else { char g[512]; if (settings_game_dir(g, sizeof g)) snprintf(dir, sizeof dir, "%s", g); strncat(dir, "perflog/", sizeof dir - strlen(dir) - 1); }
+	{ char d[700]; snprintf(d, sizeof d, "%s", dir); d[strlen(d) - 1] = 0; mkdir(d, 0777); }
+	snprintf(plog_name, sizeof plog_name, "perflog/perf-%04d%02d%02d-%02d%02d%02d.csv", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+	snprintf(path, sizeof path, "%s%s", dir, plog_name + 8);
+	plog = fopen(path, "w");
+	if (!plog) { plog_dead = 1; plog_name[0] = 0; fprintf(stderr, "    perf log: cannot create the file in %s\n", dir[0] ? "the game folder" : "the working directory"); return; }
+	plog_t0 = now; plog_bytes = 0;
+	const char *tv = getenv("RECOMP_TOOLS_VERSION"), *tid = getenv("RECOMP_TITLE"), *gv = getenv("RECOMP_GAME_VERSION");
+	char cpu[64]; plat_cpu_name(cpu, sizeof cpu);
+	int gpu = __atomic_load_n(&backend_gpu, __ATOMIC_RELAXED), rs = __atomic_load_n(&render_scale, __ATOMIC_RELAXED);
+	fprintf(plog, "# nativ performance log\n# nativ %s, title %s %s\n# %04d-%02d-%02d %02d:%02d:%02d, %d logical processors\n",
+	        tv && *tv ? tv : "-", tid && *tid ? tid : "-", gv && *gv ? gv : "", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, plat_cpu_count());
+	fputs("# cpu: ", plog); for (const char *c = cpu; *c; c++) if (*c != '\n' && *c != '\r') fputc(*c, plog);
+	fputs("\n# gpu: ", plog); for (const char *c = gpu_name_v; *c; c++) if (*c != '\n' && *c != '\r') fputc(*c, plog);
+	fprintf(plog, "\n# renderer: %s, render scale %d, window %dx%d\n# -1 = no value on this machine or renderer; render_ms is the renderer's CPU time per game frame; build/upload/wait columns are per game frame (gpu renderer only)\n", gpu ? "gpu" : "soft", rs, win_w, win_h);
+	fputs("t_s,fps,frame_avg_ms,frame_max_ms,frame_low1_ms,low1pct_fps_10s,speed,window_fps,render_ms,present_ms,scenes,draws,gpu_draws,fallback_draws,shader_builds,build_ms,tex_uploads,wait_ms,skipped_draws,cpu_game_pct,cpu_total_pct,threads,ram_game_mb,ram_used_mb,gpu_pct,gpu_clock_mhz,gpu_temp_c,gpu_power_w,vram_used_mb,audio_queued_ms,audio_underruns,renderer,res,", plog); fputs(pl_names, plog); fputc('\n', plog);
+	plog_bytes = (unsigned long)ftell(plog); fflush(plog);
+}
+static void plog_line(uint64_t now, double low1_ms, unsigned gd, unsigned fd, double cpu_proc) {
+	if (plog_dead) return;
+	if (!plog) { plog_open(now); if (!plog) return; }
+	if (plog_bytes > PERFLOG_CAP) { fprintf(plog, "# size cap reached, log stopped\n"); fclose(plog); plog = 0; plog_dead = 1; return; }
+	const MetricsSnapshot *p = &snap; const int m = p->machine;
+	int n = fprintf(plog, "%.1f,%.1f,%.2f,%.2f,%.2f,%.1f,%.2f,%.1f,%.2f,%.2f,%u,%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.0f,%u,%u,%s,%dx%d",   /* (no newline: the renderer breakdown follows) */
+	            (now - plog_t0) / 1e6, p->fps, p->frame_ms_avg, p->frame_ms_max, low1_ms, m ? p->low1_fps : -1.0f, p->speed, p->window_fps, p->render_ms, p->present_ms,
+	            p->scenes, p->draws, gd, fd, p->builds, p->build_ms, p->tex_uploads, p->waits_ms, p->skipped,
+	            m ? p->cpu_game_pct : (float)cpu_proc, m ? p->cpu_total_pct : -1.0f, m ? p->threads : -1, m ? p->ram_game_mb : -1.0f, m ? p->ram_used_mb : -1.0f,
+	            m ? p->gpu_pct : -1.0f, m ? p->gpu_clock_mhz : -1.0f, m ? p->gpu_temp_c : -1.0f, m ? p->gpu_power_w : -1.0f, m ? p->vram_used_mb : -1.0f,
+	            p->audio_ms, p->audio_underruns, p->gpu_backend ? "gpu" : "soft", win_w, win_h);
+	if (n > 0) plog_bytes += (unsigned long)n;
+	for (int k = 0; k < PL_N; k++) { int m2 = fprintf(plog, ",%.2f", pl_ms[k]); if (m2 > 0) plog_bytes += (unsigned long)m2; }
+	fputc('\n', plog); plog_bytes++;
+	fflush(plog);
+}
+
 static void maybe_tick(uint64_t now) {
 	pthread_mutex_lock(&mx);
 	if (last_tick_us && now - last_tick_us < TICK_US) { pthread_mutex_unlock(&mx); return; }
@@ -505,10 +578,19 @@ static void maybe_tick(uint64_t now) {
 		snap.tex_uploads = (float)rc_uploads / rc_frames; snap.waits_ms = (float)(rc_wait_us / 1000.0 / rc_frames); snap.skipped = (float)rc_skipped / rc_frames;
 	} else snap.builds = snap.build_ms = snap.tex_uploads = snap.waits_ms = snap.skipped = -1;
 	rc_frames = rc_builds = rc_uploads = rc_skipped = rc_build_us = rc_wait_us = 0;
-	if (metrics_osd_level() == 2) sampler_start();
+	for (int k = 0; k < PL_N; k++) {
+		const uint32_t nf = k < PL_GPU0 ? pl_frames : pl_gpu_frames;
+		pl_ms[k] = nf ? (float)((k == PL_OTHER ? (double)(int64_t)pl_acc[k] : (double)pl_acc[k]) / 1000.0 / nf) : -1.0f; pl_acc[k] = 0;
+	}
+	pl_frames = pl_gpu_frames = 0;
+	if (metrics_costs_wanted()) sampler_start();
 	rebuild_osd(metrics_osd_level());
 	maybe_dump_osd();
 
+	if (metrics_perflog_on()) {
+		if (!last_plog_us || now - last_plog_us >= REPORT_US) { last_plog_us = now; plog_line(now, low1_ms, gd, fd, cpu); }
+	} else if (plog) { fprintf(plog, "# log stopped (setting off)\n"); fclose(plog); plog = 0; last_plog_us = 0; }   /* a later switch-on starts a new file */
+	else if (plog_dead) { plog_dead = 0; last_plog_us = 0; }
 	static int metrics_env = -1; if (metrics_env < 0) { const char *e = getenv("RECOMP_METRICS"); metrics_env = e && *e && *e != '0'; }
 	if (metrics_env && (!last_report_us || now - last_report_us >= REPORT_US)) {
 		last_report_us = now;
@@ -531,7 +613,10 @@ void metrics_game_frame(void) {
 	 * 0 on the software backend) */
 	extern int gfx_gpu_overlay_costs(uint32_t *builds, uint32_t *uploads, uint32_t *skipped, uint64_t *build_us, uint64_t *wait_us);
 	uint32_t c_b = 0, c_u = 0, c_s = 0; uint64_t c_bu = 0, c_w = 0;
-	int c_have = metrics_osd_level() == 2 && gfx_gpu_overlay_costs(&c_b, &c_u, &c_s, &c_bu, &c_w);
+	int c_have = metrics_costs_wanted() && gfx_gpu_overlay_costs(&c_b, &c_u, &c_s, &c_bu, &c_w);
+	uint64_t lw = __atomic_exchange_n(&acc_lock_wait_us, 0, __ATOMIC_RELAXED), wl = __atomic_exchange_n(&acc_win_lock_us, 0, __ATOMIC_RELAXED), wa = __atomic_exchange_n(&acc_win_acq_us, 0, __ATOMIC_RELAXED);
+	extern int gfx_gpu_perf_steps(uint64_t *us, int n);
+	uint64_t st[PL_STEPS] = {0}; int st_have = c_have && gfx_gpu_perf_steps(st, PL_STEPS) == PL_STEPS;
 
 	pthread_mutex_lock(&mx);
 	lf_render_us = render_us; lf_scenes = scenes; lf_draws = draws;
@@ -541,6 +626,14 @@ void metrics_game_frame(void) {
 	if (last_game_t) gring_push(now, (uint32_t)(now - last_game_t));
 	last_game_t = now;
 	if (c_have) { rc_have = 1; rc_frames++; rc_builds += c_b; rc_uploads += c_u; rc_skipped += c_s; rc_build_us += c_bu; rc_wait_us += c_w; }
+	if (metrics_costs_wanted()) {
+		pl_frames++; pl_acc[PL_LOCK_WAIT] += lw; pl_acc[PL_WIN_LOCK] += wl; pl_acc[PL_WIN_ACQ] += wa;
+		if (st_have) {   /* (other: the total less the named steps -- signed, as RECOMP_GPU_STATS prints it; the syncs at present and guest-write time are outside the total) */
+			pl_gpu_frames++; int64_t other = (int64_t)st[0];
+			for (int k = 0; k < PL_STEPS; k++) { pl_acc[PL_GPU0 + k] += st[k]; if (k && k != 7 && k != 8) other -= (int64_t)st[k]; }   /* (7, 8: texture hash and upload are inside binding) */
+			pl_acc[PL_OTHER] += (uint64_t)other;   /* (wraps if negative; read back as signed below) */
+		}
+	}
 	pthread_mutex_unlock(&mx);
 
 	maybe_tick(now);

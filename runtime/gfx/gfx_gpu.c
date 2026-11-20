@@ -76,7 +76,7 @@ static int timing_on(void) {
 		v = e && *e ? atoi(e) != 0 : getenv("RECOMP_GPU_STATS") != 0 || (h && *h && atoi(h) > 0) || getenv("RECOMP_GPU_FENCE_STATS") != 0;
 		off = e && *e && atoi(e) == 0;
 	}
-	return v || (!off && metrics_osd_level() == 2);   /* (the full overlay shows the build and wait times: on while it does) */
+	return v || (!off && metrics_costs_wanted());   /* (the full overlay shows the build and wait times: on while it does) */
 }
 static uint64_t us_now(void) { return timing_on() ? plat_now_us() : 0; }
 static uint32_t n_shader_builds, n_vring_wraps;
@@ -90,6 +90,12 @@ static uint64_t t_pipe_build, t_tgt_download, t_readback_wait, t_ring_wait, t_sh
 static uint32_t n_shader_cached;   /* shaders whose MSL came from the cache this frame (msl_cache_get) */
 static GfxGpuFrameCosts last_costs;
 void gfx_gpu_last_frame_costs(GfxGpuFrameCosts *out) { *out = last_costs; }
+int gfx_gpu_perf_steps(uint64_t *us, int n) {   /* (DECKPERF-01: the performance log's step columns; the same buckets as RECOMP_GPU_STATS' "gpu time" line) */
+	const GfxGpuFrameCosts *c = &last_costs;
+	const uint64_t v[GFX_PERF_STEPS] = { c->t_total, c->t_setup, c->t_vfetch, c->t_shader, c->t_pipe_get, c->t_vbuf, c->t_bind, c->t_texhash, c->t_texup, c->t_scene_sync, c->t_pass, c->t_submit };
+	int k = 0; for (; k < n && k < GFX_PERF_STEPS; k++) us[k] = v[k];
+	return k;
+}
 /* the full performance overlay (metrics.c, once a game frame while it shows): the frame just presented's shader and
  * pipeline builds and their time, texture uploads, waits (target downloads, readbacks, ring wraps) and draws skipped
  * for an unfinished build; 0 on the software backend */
@@ -6792,11 +6798,12 @@ void gfx_gpu_present(uint32_t base, uint32_t width, uint32_t height, uint32_t pi
 		} else if (!window_active() && !gfx_soft_shot_due() && format == 0 && present_nosync()) { /* headless default (2026-11-07): the frame stays on the GPU, as it does with a window; RECOMP_GPU_PRESENT_NOSYNC=0 presents through guest memory (a download and a wait per frame) */ }
 		else { sync_why = "(present)"; target_sync_for_cpu(e); }   /* guest memory must hold what the GPU rendered before anything reads it below */
 	}
-	if (hitch_log() || metrics_osd_level() == 2) {   /* this frame's first-use work and waits, for display.c's hitch line and the full overlay; then the counters start the next frame (RECOMP_GPU_STATS, if also on, zeroed them above already: run one or the other) */
+	if (hitch_log() || metrics_costs_wanted()) {   /* this frame's first-use work and waits, for display.c's hitch line and the full overlay; then the counters start the next frame (RECOMP_GPU_STATS, if also on, zeroed them above already: run one or the other) */
 		GfxGpuFrameCosts c = { .draws = __atomic_load_n(&n_gpu_draws, __ATOMIC_RELAXED), .fallback = __atomic_load_n(&n_fallback, __ATOMIC_RELAXED), .shaders = n_shader_builds, .pipes = n_pipe_builds, .tex_uploads = n_tex_uploads, .tex_new = n_tex_new,
 			.tgt_downloads = n_tgt_downloads, .readback_waits = n_readback_waits, .ring_waits = n_ring_waits, .flushes = n_batch_cmd,
 			.t_total = t_total, .t_shader = t_shader, .t_xlate = t_shader_xlate, .t_msl = t_shader_msl, .t_compile = t_shader_compile, .t_pipe = t_pipe_build, .t_texup = t_texup, .t_tgt_download = t_tgt_download,
-			.t_readback_wait = t_readback_wait, .t_ring_wait = t_ring_wait, .t_vfetch = t_vfetch, .t_tsync = t_tsync, .t_scene_sync = t_scene_sync, .t_vfetch_max = t_vfetch_max, .t_map = t_map, .shaders_cached = n_shader_cached, .skipped = n_async_skips };
+			.t_readback_wait = t_readback_wait, .t_ring_wait = t_ring_wait, .t_vfetch = t_vfetch, .t_tsync = t_tsync, .t_scene_sync = t_scene_sync, .t_vfetch_max = t_vfetch_max, .t_map = t_map, .shaders_cached = n_shader_cached, .skipped = n_async_skips,
+			.t_setup = t_setup, .t_pipe_get = t_pipe, .t_vbuf = t_vbuf, .t_bind = t_bind, .t_texhash = t_texhash, .t_pass = t_pass, .t_submit = t_submit };
 		for (int i = 0; i < n_fallback_why && i < 4; i++) { c.fb_why[i] = fallback_why[i].why; c.fb_n[i] = fallback_why[i].n; }
 		c.nshaders = (uint32_t)nshaders; c.npipes = (uint32_t)npipelines;
 		last_costs = c;
