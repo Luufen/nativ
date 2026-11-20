@@ -161,7 +161,7 @@ static void begin_body(const GfxTarget *t) {   /* (under the lock) */
 }
 static int aq_push_op(int op, const void *v);   /* (DECKPERF-02, below: 1 = queued for the worker) */
 void gfx_begin_scene(const GfxTarget *t) {
-	if (aq_push_op(1, t)) { if (metrics_on()) metrics_add_scene(); return; }
+	if (aq_push_op(1, t)) return;   /* (counted by the worker) */
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
 	LOCKED_M(begin_body(t));
 	if (m) { metrics_add_render(now_us() - t0); metrics_add_scene(); }
@@ -223,7 +223,9 @@ static void draw_body(const GfxDraw *d) {   /* (under the lock) */
  * Every other entry point that takes the lock from outside it (scene begin/end, present, the guest-memory sync hooks,
  * visibility, kicks) first waits until the draws queued so far are done (aq_drain), so all of them see the same state as
  * before. The window thread's present takes the lock without draining (gfx_lock_enter: it needs the device, not the draws).
- * Off (0) by default until measured; GPU backend only. */
+ * GPU backend only. On by default in a played run (Uncharted on the Deck: 36-47 -> 60 fps in its 500-1400-draw scenes,
+ * DECKPERF-02); RECOMP_GFX_ASYNC=0 turns it off, =1 on; a headless run (RECOMP_HEADLESS: tests, captures, the gate)
+ * keeps the draws on the game's thread unless =1 asks. */
 #define AQ_N 2048u
 typedef struct { uint32_t vaddr[32], vval[32], faddr[4], fval[4]; uint8_t nv, nf; } AqKick;   /* a scene kick's words (gfx_kick_async) */
 static void end_body(void); static void kick_body(const AqKick *k);
@@ -234,7 +236,8 @@ static int aq_sleeping, aq_started;
 static __thread int aq_is_worker;
 static int aq_on(void) {
 	static int on = -1;
-	if (on < 0) { const char *e = getenv("RECOMP_GFX_ASYNC"); on = e && *e && *e != '0' && gpu_backend(); if (on) fprintf(stderr, "    gfx: draws translated on a worker thread (RECOMP_GFX_ASYNC)\n"); }
+	if (on < 0) { const char *e = getenv("RECOMP_GFX_ASYNC"), *h = getenv("RECOMP_HEADLESS");
+		on = (e && *e ? *e != '0' : !(h && *h && *h != '0')) && gpu_backend(); if (on) fprintf(stderr, "    gfx: draws translated on a worker thread (RECOMP_GFX_ASYNC)\n"); }
 	return on;
 }
 static void *aq_worker(void *arg) {
@@ -248,7 +251,7 @@ static void *aq_worker(void *arg) {
 		pthread_mutex_unlock(&aq_m);
 		const int m = metrics_on(); const uint64_t t0 = m ? now_us() : 0;
 		gfx_lock_take_raw(); gfx_host_depth++;
-		for (; t < h; t++) { const AqItem *it = &aq[t % AQ_N]; switch (it->op) { case 0: draw_body(&it->u.d); break; case 1: begin_body(&it->u.t); break; case 2: end_body(); break; default: kick_body(&it->u.k); } __atomic_store_n(&aq_tail, t + 1, __ATOMIC_RELEASE); }
+		for (; t < h; t++) { const AqItem *it = &aq[t % AQ_N]; switch (it->op) { case 0: draw_body(&it->u.d); if (m) metrics_add_draw(); break; case 1: begin_body(&it->u.t); if (m) metrics_add_scene(); break; case 2: end_body(); break; default: kick_body(&it->u.k); } __atomic_store_n(&aq_tail, t + 1, __ATOMIC_RELEASE); }
 		gfx_host_depth--; gfx_lock_give();
 		if (m) metrics_add_render(now_us() - t0);
 		pthread_mutex_lock(&aq_m); pthread_cond_broadcast(&aq_done); pthread_mutex_unlock(&aq_m);
@@ -294,9 +297,12 @@ static void aq_drain(void) {   /* the draws queued so far (by any thread) done; 
 	pthread_mutex_unlock(&aq_m);
 	if (st) aq_stat(aq_why, waited, waited ? now_us() - t0 : 0);
 }
+static pthread_once_t aq_once = PTHREAD_ONCE_INIT;   /* the worker, started by the first queued op */
 static int aq_scenes_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("RECOMP_GFX_ASYNC_SCENES"); on = !(e && *e == '0'); } return on; }
 static int aq_push_op(int op, const void *v) {
-	if (gfx_my_depth || !aq_on() || !aq_scenes_on() || !__atomic_load_n(&aq_started, __ATOMIC_ACQUIRE)) return 0;
+	if (gfx_my_depth || !aq_on() || !aq_scenes_on()) return 0;
+	pthread_once(&aq_once, aq_start);
+	if (!__atomic_load_n(&aq_started, __ATOMIC_ACQUIRE)) return 0;
 	aq_push(op, v); return 1;
 }
 int gfx_async_on(void) { return aq_on() && aq_scenes_on() && __atomic_load_n(&aq_started, __ATOMIC_ACQUIRE); }
@@ -305,8 +311,8 @@ void gfx_draw(const GfxDraw *d) {
 	video_sync_draw(d);
 	if (gfx_prim_kind(d->prim) == GFX_PRIM_POINTS) point_draw_seen(d);
 	if (!gfx_my_depth && aq_on()) {   /* (a draw from inside the lock -- a capture's replay -- stays in line) */
-		static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, aq_start);
-		if (__atomic_load_n(&aq_started, __ATOMIC_ACQUIRE)) { aq_push(0, d); if (metrics_on()) metrics_add_draw(); return; }
+		pthread_once(&aq_once, aq_start);
+		if (__atomic_load_n(&aq_started, __ATOMIC_ACQUIRE)) { aq_push(0, d); return; }   /* (counted by the worker) */
 	}
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
 	LOCKED_M(draw_body(d));
