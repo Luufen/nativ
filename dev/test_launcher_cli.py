@@ -58,6 +58,8 @@ def main():
         log = os.path.join(tmp, "calls.jsonl")
         base = {k: v for k, v in os.environ.items() if k not in ("ATIV_DUMP", "ATIV_PREFS", "ATIV_TASK", "ATIV_SHOT", "ATIV_CACHE", "PYTHONPYCACHEPREFIX", "ZIG_GLOBAL_CACHE_DIR")}
         base.update(ATIV_ROOT=root, FAKE_LOG=log, ATIV_PLAY_QUIET="1")
+        home = os.path.join(tmp, "home")   # (the usual places: a library there would be offered, never the real user's)
+        base.update(HOME=home, USERPROFILE=home, APPDATA=os.path.join(home, "roaming"), LOCALAPPDATA=os.path.join(home, "local"), XDG_DATA_HOME=os.path.join(home, "share"))
 
         def run(args, **env):
             if os.path.exists(log): os.remove(log)

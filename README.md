@@ -21,6 +21,14 @@ Each release has, with `SHA256SUMS` over them:
   `tar xzf ProjectNativ-<tag>-linux.tar.gz`, then run `ProjectNativ/Project Nativ.sh` (Steam: add that file as a
   non-Steam game). Nothing is mounted or unpacked at start.
 
+**Portable:** the zip and the tarball keep everything in their own folder: your games and saves in `library/`, the
+settings in `settings/`, caches in `cache/` (a file named `portable` at the top says so; delete it to use your user
+folder instead). To update, extract the new release over the same folder: those three folders stay. If you had a
+library in your user folder (`%LOCALAPPDATA%\ProjectNativ\Nativ\library`, `~/.local/share/ProjectNativ/Nativ/library`),
+the launcher uses it from there and asks once whether to move it into the folder or keep it where it is; your settings
+are copied in. The AppImage keeps using your user folder; put a file named `portable` beside the AppImage, or start it
+with `--data-dir <folder>`, to keep everything in one folder there too.
+
 The launcher is the only program you start. It also takes a command line (`nativ --help`, on Windows
 `"Project Nativ.exe" --help`), for scripts, Steam and other launchers:
 
@@ -289,6 +297,7 @@ Your games, firmware, licences, builds and saves live in one library folder:
 - `dump/` inside a checkout, which git ignores;
 - otherwise your per-user data folder: `~/Library/Application Support/ProjectNativ/Nativ/library` on macOS, under
   `~/.local/share` on Linux and under `%LOCALAPPDATA%` on Windows;
+- `library/` in a portable install (a file named `portable` at its top) or in the launcher's `--data-dir <folder>`;
 - or wherever `ATIV_DUMP` points.
 
 ### Installing

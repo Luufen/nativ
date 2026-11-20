@@ -32,6 +32,10 @@
  * (RECOMPLAUNCHER-01 L4) the whole command line is cli_args.h's (nativ --help): --list, --play <title> [-- <game flags>],
  * --build <title>, --add <folder>, --data-dir <dir>, --fullscreen / --windowed; exit status 0 done, 1 failed, 2 a bad
  * command line or a title not in the library. The variables above keep working (ATIV_TASK=add:<folder> too).
+ * (RECOMPLAUNCHER-01 L2) portable: a file named "portable" at the install's top (or beside the launcher; an AppImage's: beside
+ * the AppImage) keeps the library, settings and caches in that folder (library/, settings/, cache/), as --data-dir does. A
+ * library still in the usual place is used from there until the player moves it in or keeps it there (the "Your library"
+ * dialog; pipeline/datadir.py move); the usual place's settings are copied in once. Updating = extracting over the folder.
  * The library's view (hub.ini): library_view = grid | list, library_size = 60..160 (percent, the cards' and icons' size).
  */
 #include "imgui.h"
@@ -132,12 +136,74 @@ static std::string full_path(std::string p) {   /* (a folder given on the comman
  * compiler cache and the exports' staging (ATIV_CACHE). Given as a flag it wins over ATIV_DUMP / ATIV_PREFS / the caches'
  * variables (the stages it runs inherit them) */
 static std::string g_data_dir;   /* "" the usual places */
+static void prefs_load(void);
 static bool g_data_dir_flag;     /* it came from --data-dir: a Steam shortcut carries it */
+static std::string g_old_library;   /* (L2) a library in the usual place while the data folder's own is empty: used, offered to move (library_dir) */
+/* the usual places (before a data folder): the launcher's own folder -- SDL_GetPrefPath("ProjectNativ", "Nativ")'s, worked out
+ * here so asking doesn't make it -- and the per-user library (pipeline/datadir.py: the same) */
+static std::string user_prefs_dir(void) {
+#ifdef _WIN32
+	const char *a = getenv("APPDATA"), *up = getenv("USERPROFILE");
+	const std::string base = a && *a ? a : std::string(up ? up : ".") + "/AppData/Roaming";
+#elif defined(__APPLE__)
+	const char *h = getenv("HOME"); const std::string base = std::string(h ? h : ".") + "/Library/Application Support";
+#else
+	const char *x = getenv("XDG_DATA_HOME"), *h = getenv("HOME");
+	const std::string base = x && *x ? x : std::string(h ? h : ".") + "/.local/share";
+#endif
+	return base + "/ProjectNativ/Nativ";
+}
+static std::string user_library_dir(void) {   /* local, not roaming, on Windows: a game is gigabytes */
+	const char *home = getenv("HOME"); std::string base;
+#ifdef _WIN32
+	const char *la = getenv("LOCALAPPDATA"), *up = getenv("USERPROFILE");
+	base = la && *la ? la : std::string(up ? up : ".") + "/AppData/Local";
+#elif defined(__APPLE__)
+	base = std::string(home ? home : ".") + "/Library/Application Support";
+#else
+	const char *xdg = getenv("XDG_DATA_HOME");
+	base = xdg && *xdg ? xdg : std::string(home ? home : ".") + "/.local/share";
+#endif
+	(void)home;
+	return base + "/ProjectNativ/Nativ/library";
+}
+static bool library_has(const std::string &d) {   /* a library with something of the player's in it, not an empty folder */
+	return exists(d + "/decrypted") || exists(d + "/firmware") || exists(d + "/licenses");
+}
+/* (L2) a portable install: "portable" beside the AppImage (its own folder can't be written), else at the install's top or
+ * beside the launcher: that folder holds the data ("" not portable) */
+static std::string portable_dir(void) {
+#if !defined(_WIN32) && !defined(__APPLE__)
+	if (const char *a = getenv("APPIMAGE")) if (*a) {
+		std::string d = a; const size_t s = d.rfind('/'); d = s == std::string::npos ? "." : s == 0 ? "/" : d.substr(0, s);
+		return exists(d + "/portable") ? d : "";
+	}
+#endif
+	if (exists(g_root + "/portable")) return g_root;
+	if (const char *b = SDL_GetBasePath()) if (exists(std::string(b) + "portable")) return g_root;
+	return "";
+}
+static void settings_file_copy(const std::string &from, const std::string &to) {
+	std::string body; if (FILE *in = fopen(from.c_str(), "rb")) { char b[4096]; size_t n; while ((n = fread(b, 1, sizeof b, in)) > 0) body.append(b, n); fclose(in); } else return;
+	if (FILE *out = fopen(to.c_str(), "wb")) { fwrite(body.data(), 1, body.size(), out); fclose(out); }
+}
 static void data_dir_use(const std::string &d, bool flag) {
 	make_dirs(d); g_data_dir = full_path(d); g_data_dir_flag = flag;
-	auto put = [&](const char *k, const std::string &v) { const char *e = getenv(k); if (flag || !e || !*e) set_env(k, v); };
-	put("ATIV_PREFS", g_data_dir + "/settings");
-	put("ATIV_DUMP", g_data_dir + "/library");
+	auto put = [&](const char *k, const std::string &v) { const char *e = getenv(k); if (flag || !e || !*e) { set_env(k, v); return true; } return false; };
+	if (put("ATIV_PREFS", g_data_dir + "/settings")) {   /* (the usual place's settings copied in once: the player's choices, library folders, play times; never moved) */
+		const std::string to = g_data_dir + "/settings", from = user_prefs_dir();
+		if (!exists(to + "/hub.ini") && exists(from + "/hub.ini")) {
+			make_dirs(to);
+			if (DIR *dir = opendir(from.c_str())) {
+				while (dirent *e = readdir(dir)) {
+					const std::string n = e->d_name, f = from + "/" + n; struct stat st;
+					if (n[0] == '.' || n.find(".log") != std::string::npos || stat(f.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+					settings_file_copy(f, to + "/" + n);
+				}
+				closedir(dir);
+			}
+		}
+	}
 	put("ATIV_CACHE", g_data_dir + "/cache");
 	put("PYTHONPYCACHEPREFIX", g_data_dir + "/cache/pycache");
 	put("ZIG_GLOBAL_CACHE_DIR", g_data_dir + "/cache/zig");
@@ -2771,6 +2837,46 @@ static void steam_closed_modal(void) {
 	ImGui::EndPopup();
 }
 
+/* ---- (RECOMPLAUNCHER-01 L2) "Your library": a portable install (or --data-dir) found the player's library in the usual
+ * place. Move it in (pipeline/datadir.py move: nothing removed until the copy is whole), keep using it there (hub.ini
+ * library_dir), or not now (asked again next start). Until then the library is used where it is. */
+static bool g_libmove_open;
+static std::string libmove_target(void) { return g_data_dir + "/library"; }
+static void libmove_modal(void) {
+	const ImGuiViewport *vp = ImGui::GetMainViewport();
+	const float em = ImGui::GetFontSize();
+	if (g_libmove_open && !ImGui::IsPopupOpen("Your library")) ImGui::OpenPopup("Your library");
+	ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x < 44 * em ? vp->WorkSize.x * 0.94f : 32 * em, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(1.6f * em, 1.3f * em)); ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	if (!ImGui::BeginPopupModal("Your library", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove)) { ImGui::PopStyleVar(2); return; }
+	ImGui::PopStyleVar(2);
+	ui::heading("Your library", em * 1.4f);
+	dialog_body_begin();
+	ImGui::PushTextWrapPos(0);
+	ImGui::TextUnformatted("This copy of Project Nativ keeps your games, settings and caches in its own folder:");
+	ui::muted_wrapped(g_data_dir.c_str());
+	ImGui::Dummy(ImVec2(0, em * 0.3f));
+	ImGui::TextUnformatted("Your library is still in the usual place, and Project Nativ uses it from there:");
+	ui::muted_wrapped(g_old_library.c_str());
+	ImGui::Dummy(ImVec2(0, em * 0.3f));
+	ImGui::TextUnformatted("Move it into this folder, or keep using it where it is? A move removes nothing until every file has arrived.");
+	ImGui::PopTextWrapPos();
+	dialog_body_end();
+	ImGui::BeginDisabled(g_task.running);
+	if (ui::primary_button("Move it here")) {
+		g_libmove_open = false; ImGui::CloseCurrentPopup();
+		if (g_shot_mode) g_shot_done.push_back("libmove " + g_old_library + " -> " + libmove_target());
+		else task_start("Moving your library", "libmove", "", {step("Moving your library to " + libmove_target(), {python_exe(), g_root + "/pipeline/datadir.py", "move", g_old_library, libmove_target()})});
+	}
+	ImGui::EndDisabled();
+	same_line_fits(button_w("Keep using it there"));
+	if (ImGui::Button("Keep using it there")) { if (g_settings_writable) prefs_set("library_dir", g_old_library); g_old_library.clear(); g_libmove_open = false; ImGui::CloseCurrentPopup(); }
+	same_line_fits(button_w("Not now")); if (ImGui::Button("Not now") || dialog_back()) { g_libmove_open = false; ImGui::CloseCurrentPopup(); }
+	dialog_hints();
+	ImGui::EndPopup();
+}
+
 /* ---- a game's state, its title-id line and its actions: on its card and on its row of the list */
 /* ---- what the list shows beside a game (UI-01l): when it was last played and for how long -- <prefs>/playtime.tsv, written
  * when a game started from here or from a Steam shortcut ends (the time it ran, not its build check) -- and how much
@@ -4055,6 +4161,7 @@ static void hub_ui(SDL_Window *win) {
 	} else ImGui::PopStyleVar(2);
 	sac_modal();
 	steam_closed_modal();
+	libmove_modal();
 	export_modal();
 	online_name_modal();
 	setup_modal(win);
@@ -4347,22 +4454,25 @@ static std::string find_root(void) {
 
 /* the player's library (pipeline/datadir.py makes the same choice; the stages get this one as ATIV_DUMP): ATIV_DUMP, else
  * <root>/dump when it exists (a checkout, an install from before), else the platform's per-user data folder -- local, not
- * roaming, on Windows: a game is gigabytes -- so an update replaces the install without touching what the player made */
+ * roaming, on Windows: a game is gigabytes -- so an update replaces the install without touching what the player made.
+ * (L2) With a data folder (--data-dir, which wins over ATIV_DUMP; a portable install, which doesn't): the one the player
+ * chose to keep (hub.ini library_dir), else <data>/library once it holds something, else a library in the usual places,
+ * used from there and offered to move in (g_old_library) -- never an empty new one while the player's games are elsewhere */
 static std::string library_dir(void) {
-	if (const char *d = getenv("ATIV_DUMP")) if (*d) return d;
+	if (const char *d = getenv("ATIV_DUMP")) if (*d && !g_data_dir_flag) return d;
+	if (!g_data_dir.empty()) {
+		const std::string own = g_data_dir + "/library";
+		prefs_load();
+		const std::string kept = g_prefs["library_dir"];
+		if (!kept.empty() && exists(kept)) return kept;
+		if (library_has(own)) return own;
+		for (const std::string &old : {g_root + "/dump", user_library_dir()})
+			if (full_path(old) != full_path(own) && library_has(old)) { g_old_library = old; return old; }
+		make_dirs(own);
+		return own;
+	}
 	if (exists(g_root + "/dump")) return g_root + "/dump";
-	const char *home = getenv("HOME"); std::string base;
-#ifdef _WIN32
-	const char *la = getenv("LOCALAPPDATA"), *up = getenv("USERPROFILE");
-	base = la && *la ? la : std::string(up ? up : ".") + "/AppData/Local";
-#elif defined(__APPLE__)
-	base = std::string(home ? home : ".") + "/Library/Application Support";
-#else
-	const char *xdg = getenv("XDG_DATA_HOME");
-	base = xdg && *xdg ? xdg : std::string(home ? home : ".") + "/.local/share";
-#endif
-	(void)home;
-	return base + "/ProjectNativ/Nativ/library";
+	return user_library_dir();
 }
 
 static void task_wait(void) {   /* (a command-line task: until it ends; ATIV_TASK_CANCEL=<seconds>: Cancel then) */
@@ -4482,8 +4592,11 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 	if (!cli.data_dir.empty()) data_dir_use(cli.data_dir, true);
+	else { const std::string pd = portable_dir(); if (!pd.empty()) data_dir_use(pd, false); }
 	g_dump = library_dir();
-	set_env("ATIV_DUMP", g_dump);   /* (the stages it runs: the same library whatever their own rule finds) */
+	set_env("ATIV_DUMP", g_dump);
+	if (!g_old_library.empty() && cli.action != CLI_WINDOW && cli.action != CLI_HELP)
+		fprintf(stderr, "nativ: your library is still at %s (open Project Nativ to move it into %s/library, or keep it there)\n", g_old_library.c_str(), g_data_dir.c_str());   /* (the stages it runs: the same library whatever their own rule finds) */
 	const char *shot_path = getenv("ATIV_SHOT");
 	g_shot_mode = shot_path != nullptr;
 	g_shot_tasks = g_shot_mode && getenv("ATIV_SHOT_TASKS") && atoi(getenv("ATIV_SHOT_TASKS"));
@@ -4583,6 +4696,7 @@ int main(int argc, char **argv) {
 				g_export_shot_state = st == "run" ? 1 : st == "ok" ? 2 : 3;
 			}
 		}
+		if (ui_sel == "libmove") { g_libmove_open = true; if (g_data_dir.empty()) g_data_dir = "D:/Games/ProjectNativ"; if (g_old_library.empty()) g_old_library = "C:/Users/Player/AppData/Local/ProjectNativ/Nativ/library"; }   /* (the dialog, with made-up folders when none) */
 		if (ui_sel == "steamclosed") { g_steam_closed_open = true; g_steam_name = "Adding Soul Sacrifice Delta to Steam"; g_steam_game = "PCSF00532"; g_steam_steps = {step("Adding it to Steam", vitarecomp({"steam", "add", "PCSF00532"}))}; }
 		if (ui_sel == "osk") { static std::string sample = "D:/Vita backup/ux0"; osk_open(&sample, "##scanpath"); g_osk.top = true; }
 		if (ui_sel.rfind("browse:", 0) == 0) {   /* (browse:<kind>:<dir>: the own browser, opened at <dir>) */
@@ -4602,6 +4716,7 @@ int main(int argc, char **argv) {
 		return r;
 	}
 
+	g_libmove_open = !g_old_library.empty();
 	update_check_start(); files_check_start(); steam_refresh();
 	playtime_load(); size_refresh();
 	/* fullscreen (UI-01h): --fullscreen (a Steam entry for the launcher itself) or --windowed, else as last time (hub.ini
@@ -4644,6 +4759,11 @@ int main(int argc, char **argv) {
 			library_scan();
 			if (g_task.kind == "scan" && g_task.ok) scan_load(scan_file());
 			if (g_task.kind == "report" && g_task.ok) open_folder(g_dump + "/reports");
+			if (g_task.kind == "libmove" && g_task.ok) {   /* (moved: from now on the data folder's own; failed: still the old one, the log says why) */
+				g_dump = libmove_target(); set_env("ATIV_DUMP", g_dump); g_old_library.clear();
+				if (g_prefs.count("library_dir")) prefs_set("library_dir", "");
+				library_scan(); size_refresh();
+			}
 			if (g_task.kind == "steam") {   /* what Steam has from us, read again; Steam was running: the dialog to close it */
 				steam_refresh();
 				std::lock_guard<std::mutex> l(g_log_lock);
