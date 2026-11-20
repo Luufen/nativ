@@ -1679,18 +1679,26 @@ void window_run(void *(*fn)(void *), void *arg) {
 		 * safe against this thread recording and submitting while the renderer creates, records and submits on others. With
 		 * GPU transfers and snapshots on (gfx_gpu.c), which make and copy more each frame, Killzone crashed inside SDL in this
 		 * thread's submit, or jumped into garbage, in 3 of 4 windowed runs; under the lock, none in 7+ (2026-10-26). Mailbox
-		 * doesn't wait in the acquire, so it goes under the lock too; with vsync the acquire waits a refresh, outside it.
-		 * RECOMP_WINDOW_LOCK=0|1 picks */
+		 * RECOMP_WINDOW_LOCK=0|1 picks. The swapchain acquire runs outside it in every present mode (DECKPERF-01): mailbox
+		 * was thought not to wait there, but a compositor may pace it anyway -- the suspect for Uncharted on a Steam Deck in
+		 * Game Mode (gamescope): 5-15 fps, ~0.15 ms of render time a draw, the window loop at exactly 60, the CPU half idle,
+		 * Desktop Mode much faster; an acquire that waits under the lock leaves the render thread only the gaps between
+		 * refreshes (the performance log's acquire_ms and lock_wait_ms show it). The unlocked acquire is the vsync path's,
+		 * safe the same way (the fence poll and sweep above). RECOMP_WINDOW_ACQUIRE_LOCKED=1: mailbox/immediate acquire under the lock, as
+		 * before (the A/B) */
 		extern void gfx_lock_enter(void), gfx_lock_leave(void);
 		static int wlock = -1; if (wlock < 0) { const char *e = getenv("RECOMP_WINDOW_LOCK"), *dv = SDL_GetGPUDeviceDriver(gpu); wlock = e && *e ? *e != '0' : dv && !strcmp(dv, "vulkan"); }
+		static int acq_locked = -1; if (acq_locked < 0) { const char *e = getenv("RECOMP_WINDOW_ACQUIRE_LOCKED"); acq_locked = e && *e && *e != '0'; }
+		const int acq_unlock = wlock && !(self_paced && acq_locked);
 		if (wlock) gfx_lock_enter();
 		gpu_sweep(gpu);
-		if (wlock && !self_paced) gfx_lock_leave();   /* (vsync: the acquire waits a refresh, outside the lock) */
+		if (acq_unlock) gfx_lock_leave();   /* (the acquire may wait a refresh: outside the lock) */
 		SDL_GPUTexture *swap = 0;
 		uint32_t ww = 0, wh = 0;
 		int got_swap = SDL_WaitAndAcquireGPUSwapchainTexture(cmd, win, &swap, &ww, &wh);
 		uint64_t t_blit2 = now_us();
-		if (wlock && !self_paced) gfx_lock_enter();
+		metrics_add_window_acquire(t_blit2 - t_blit1);   /* (the performance log's acquire_ms: what the swapchain made this loop wait) */
+		if (acq_unlock) gfx_lock_enter();
 		if (got_swap && ww && wh) { win_pw = ww; win_ph = wh; }
 		/* the frame to show, picked after the drawable wait: whatever the game flipped while this loop
 		 * waited for vsync goes out now, not a refresh later */

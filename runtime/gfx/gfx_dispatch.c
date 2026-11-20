@@ -38,9 +38,21 @@ static void gfx_lock_take(void) {
 }
 static void gfx_lock_give(void) { if (waitstats_on() && !--gfx_hold_depth) waitstats_held(gfx_hold_t0); pthread_mutex_unlock(&gfx_lock); }
 #define LOCKED(...) do { gfx_lock_take(); gfx_host_depth++; __VA_ARGS__; gfx_host_depth--; gfx_lock_give(); } while (0)
-/* the same lock for the window thread's own SDL_GPU calls (window.c's present loop, RECOMP_WINDOW_LOCK) */
-void gfx_lock_enter(void) { gfx_lock_take(); }
-void gfx_lock_leave(void) { gfx_lock_give(); }
+/* (DECKPERF-01) the four timed entry points below (scene begin/end, draw, present): while the performance log or the full
+ * overlay collects costs, the time this thread waited for the lock -- metrics.c's lock_wait_ms, the part of render_ms
+ * that is another thread's hold (the window thread's present, below), not the renderer's own work. A trylock first:
+ * uncontended it adds no clock read */
+static void gfx_lock_take_m(void) {
+	if (waitstats_on() || !metrics_costs_wanted()) { gfx_lock_take(); return; }
+	pthread_once(&gfx_lock_once, gfx_lock_init);
+	if (pthread_mutex_trylock(&gfx_lock)) { const uint64_t t0 = now_us(); pthread_mutex_lock(&gfx_lock); metrics_add_lock_wait(now_us() - t0); }
+}
+#define LOCKED_M(...) do { gfx_lock_take_m(); gfx_host_depth++; __VA_ARGS__; gfx_host_depth--; gfx_lock_give(); } while (0)
+/* the same lock for the window thread's own SDL_GPU calls (window.c's present loop, RECOMP_WINDOW_LOCK); with costs
+ * collected, how long it holds it (metrics.c's window_lock_ms: blit, overlay, submit and present under the lock) */
+static __thread uint64_t win_hold_t0; static __thread int win_hold_depth;
+void gfx_lock_enter(void) { gfx_lock_take(); if (!win_hold_depth++) win_hold_t0 = metrics_costs_wanted() ? now_us() : 0; }
+void gfx_lock_leave(void) { if (!--win_hold_depth && win_hold_t0) metrics_add_window_lock(now_us() - win_hold_t0); gfx_lock_give(); }
 
 static int gpu_backend(void) {
 	static int b = -1;
@@ -139,7 +151,7 @@ static const GfxTarget *transient_depth(const GfxTarget *t, GfxTarget *out) {
 void gfx_begin_scene(const GfxTarget *t) {
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
 	GfxTarget dims, tdepth;
-	LOCKED(gfxcap_target_scene(t); gfxcap_scene(t); gfxcov_scene(t); t = scene_dims(t, &dims); t = transient_depth(t, &tdepth); scene_target = *t; if (gpu_backend()) gfx_gpu_begin_scene(t); else gfx_soft_begin_scene(t));
+	LOCKED_M(gfxcap_target_scene(t); gfxcap_scene(t); gfxcov_scene(t); t = scene_dims(t, &dims); t = transient_depth(t, &tdepth); scene_target = *t; if (gpu_backend()) gfx_gpu_begin_scene(t); else gfx_soft_begin_scene(t));
 	if (m) { metrics_add_render(now_us() - t0); metrics_add_scene(); }
 }
 static uint64_t presented;   /* frames presented so far (point_draw_seen's log line) */
@@ -190,7 +202,7 @@ void gfx_draw(const GfxDraw *d) {
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
 	GfxDraw tmp;
 	if (gfx_prim_kind(d->prim) == GFX_PRIM_POINTS) point_draw_seen(d);
-	LOCKED(rc_on_draw(d); gfxcap_draw(d); gfxcov_draw(d); if (!roundtrip_skip(d)) { d = backend_draw(d, &tmp); if (gpu_backend()) gfx_gpu_draw(d); else gfx_soft_draw(d); });
+	LOCKED_M(rc_on_draw(d); gfxcap_draw(d); gfxcov_draw(d); if (!roundtrip_skip(d)) { d = backend_draw(d, &tmp); if (gpu_backend()) gfx_gpu_draw(d); else gfx_soft_draw(d); });
 	if (m) { metrics_add_render(now_us() - t0); metrics_add_draw(); }
 }
 void gfx_sync_to_guest(void) { LOCKED(if (gpu_backend()) gfx_gpu_sync_all()); }
@@ -221,7 +233,7 @@ void gfx_vis_settle(void) { if (gfx_gpu_vis_deferred()) LOCKED(gfx_gpu_vis_flush
 int gfx_transfer_downscale(uint32_t src, uint32_t sw, uint32_t sh, uint32_t sstride, uint32_t dst, uint32_t dstride) { int r = 0; LOCKED(if (gpu_backend()) r = gfx_gpu_transfer_downscale(src, sw, sh, sstride, dst, dstride)); return r; }   /* a CPU read of guest memory a GPU target may hold newer: the download only */
 void gfx_end_scene(void) {
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
-	LOCKED(rc_on_end_scene(); gfxcap_end_scene(); if (gpu_backend()) gfx_gpu_end_scene(); else gfx_soft_end_scene());
+	LOCKED_M(rc_on_end_scene(); gfxcap_end_scene(); if (gpu_backend()) gfx_gpu_end_scene(); else gfx_soft_end_scene());
 	if (m) metrics_add_render(now_us() - t0);
 }
 void gfx_frame_queued(void) {   /* (the game's thread: under the lock, as its draws; only the motion vectors use it: RECOMP_MV, RECOMP_FSR) */
@@ -262,7 +274,7 @@ void gfx_present(uint32_t base, uint32_t width, uint32_t height, uint32_t pitch,
 	}
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
 	presented++;
-	LOCKED(
+	LOCKED_M(
 		gfxcap_present(base, width, height, pitch, format);
 		gfxcov_present(format);
 		if (gpu_backend()) gfx_gpu_present(base, width, height, pitch, format);

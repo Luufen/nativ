@@ -235,9 +235,15 @@ void gfx_gpu_sync_all(void);   /* every GPU render target written back to guest 
  * downloads, readbacks, ring wraps), counts and microseconds. Zeros on the software backend. */
 typedef struct { uint32_t draws, fallback, shaders, pipes, tex_uploads, tex_new, tgt_downloads, readback_waits, ring_waits, flushes, shaders_cached, skipped;   /* skipped: draws waiting for an asynchronous shader/pipeline build (gfx_gpu.c's gpu_async) */
 	uint64_t t_total, t_shader, t_xlate, t_msl, t_compile, t_pipe, t_texup, t_tgt_download, t_readback_wait, t_ring_wait, t_vfetch, t_tsync, t_scene_sync, t_vfetch_max, t_map;
+	uint64_t t_setup, t_pipe_get, t_vbuf, t_bind, t_texhash, t_pass, t_submit;   /* (DECKPERF-01) the rest of RECOMP_GPU_STATS' "gpu time" buckets: setup, pipeline lookups, vertex upload, texture binding (its hash), pass, submit */
 	const char *fb_why[4]; uint32_t fb_n[4];   /* why the software-path draws went there (the first four reasons) */
 	uint32_t nshaders, npipes; } GfxGpuFrameCosts;   /* the shader and pipeline tables' sizes so far (each has a fixed capacity) */
 void gfx_gpu_last_frame_costs(GfxGpuFrameCosts *out);
+/* the performance log's renderer columns (metrics.c): the frame just presented's draw-path time by step, microseconds, in
+ * GFX_PERF_STEP order; 0 on the software backend or while nothing collects the costs. Returns the count filled. */
+enum { GFX_PERF_TOTAL, GFX_PERF_SETUP, GFX_PERF_VFETCH, GFX_PERF_SHADER, GFX_PERF_PIPE, GFX_PERF_VBUF, GFX_PERF_BIND, GFX_PERF_TEXHASH, GFX_PERF_TEXUP,
+       GFX_PERF_SCENE_SYNC, GFX_PERF_PASS, GFX_PERF_SUBMIT, GFX_PERF_STEPS };
+int gfx_gpu_perf_steps(uint64_t *us, int n);
 void gfx_gpu_builds_stop(void);   /* before exit(): the build workers stop (gfx_gpu.c) */
 void gfx_gpu_builds_wait(void);   /* asynchronous shader/pipeline builds (RECOMP_GPU_ASYNC): wait for every queued one */
 void gfx_gpu_guest_writing(uint32_t addr, uint32_t len);   /* guest memory is about to change behind the GPU's back: overlapping GPU-drawn targets download first */

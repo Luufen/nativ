@@ -15,6 +15,11 @@ int metrics_on(void);   /* anything reading the numbers (a window, RECOMP_METRIC
 void metrics_add_render(uint64_t us);
 void metrics_add_scene(void);
 void metrics_add_draw(void);
+/* (DECKPERF-01) while costs are collected (metrics_costs_wanted): gfx_dispatch.c's timed entry points' wait for the renderer
+ * lock (part of render time), and the window thread's hold of that lock (its present under it) -- performance log columns */
+void metrics_add_lock_wait(uint64_t us);
+void metrics_add_window_lock(uint64_t us);
+void metrics_add_window_acquire(uint64_t us);   /* window.c: its swapchain acquire's wait (vsync, or a compositor's pacing) */
 void metrics_set_backend(int gpu);
 void metrics_set_render_scale(int n);   /* the GPU backend's internal resolution multiplier (gfx_gpu.c RECOMP_RENDER_SCALE / F2), shown with the backend */
 

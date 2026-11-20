@@ -66,6 +66,16 @@ static int backend_gpu;   /* 0 soft, 1 gpu; metrics_set_backend's only writer, s
 void metrics_add_render(uint64_t us) { __atomic_add_fetch(&acc_render_us, us, __ATOMIC_RELAXED); }
 void metrics_add_scene(void) { __atomic_add_fetch(&acc_scenes, 1, __ATOMIC_RELAXED); }
 void metrics_add_draw(void) { __atomic_add_fetch(&acc_draws, 1, __ATOMIC_RELAXED); }
+static uint64_t acc_lock_wait_us, acc_win_lock_us, acc_win_acq_us;
+void metrics_add_lock_wait(uint64_t us) { __atomic_add_fetch(&acc_lock_wait_us, us, __ATOMIC_RELAXED); }
+void metrics_add_window_lock(uint64_t us) { __atomic_add_fetch(&acc_win_lock_us, us, __ATOMIC_RELAXED); }
+void metrics_add_window_acquire(uint64_t us) { __atomic_add_fetch(&acc_win_acq_us, us, __ATOMIC_RELAXED); }
+/* (DECKPERF-01) the performance log's renderer breakdown, ms per game frame over the last tick: the lock wait and hold above,
+ * the window's swapchain acquire wait (window.c), then gfx_gpu_perf_steps' draw-path steps (gfx.h GFX_PERF_*) and what the steps leave of their total. -1: not collected */
+#define PL_STEPS 12
+enum { PL_LOCK_WAIT, PL_WIN_LOCK, PL_WIN_ACQ, PL_GPU0, PL_OTHER = PL_GPU0 + PL_STEPS, PL_N };
+static const char *const pl_names = "lock_wait_ms,window_lock_ms,acquire_ms,draw_path_ms,setup_ms,vfetch_ms,shader_ms,pipe_ms,vbuf_ms,bind_ms,texhash_ms,texup_ms,scene_sync_ms,pass_ms,submit_ms,other_ms";
+static uint64_t pl_acc[PL_N]; static uint32_t pl_frames, pl_gpu_frames; static float pl_ms[PL_N] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 void metrics_set_backend(int gpu) { __atomic_store_n(&backend_gpu, gpu, __ATOMIC_RELAXED); }
 static int render_scale = 1;
 void metrics_set_render_scale(int n) { __atomic_store_n(&render_scale, n, __ATOMIC_RELAXED); }
@@ -507,7 +517,7 @@ static void plog_open(uint64_t now) {
 	fputs("# cpu: ", plog); for (const char *c = cpu; *c; c++) if (*c != '\n' && *c != '\r') fputc(*c, plog);
 	fputs("\n# gpu: ", plog); for (const char *c = gpu_name_v; *c; c++) if (*c != '\n' && *c != '\r') fputc(*c, plog);
 	fprintf(plog, "\n# renderer: %s, render scale %d, window %dx%d\n# -1 = no value on this machine or renderer; render_ms is the renderer's CPU time per game frame; build/upload/wait columns are per game frame (gpu renderer only)\n", gpu ? "gpu" : "soft", rs, win_w, win_h);
-	fputs("t_s,fps,frame_avg_ms,frame_max_ms,frame_low1_ms,low1pct_fps_10s,speed,window_fps,render_ms,present_ms,scenes,draws,gpu_draws,fallback_draws,shader_builds,build_ms,tex_uploads,wait_ms,skipped_draws,cpu_game_pct,cpu_total_pct,threads,ram_game_mb,ram_used_mb,gpu_pct,gpu_clock_mhz,gpu_temp_c,gpu_power_w,vram_used_mb,audio_queued_ms,audio_underruns,renderer,res\n", plog);
+	fputs("t_s,fps,frame_avg_ms,frame_max_ms,frame_low1_ms,low1pct_fps_10s,speed,window_fps,render_ms,present_ms,scenes,draws,gpu_draws,fallback_draws,shader_builds,build_ms,tex_uploads,wait_ms,skipped_draws,cpu_game_pct,cpu_total_pct,threads,ram_game_mb,ram_used_mb,gpu_pct,gpu_clock_mhz,gpu_temp_c,gpu_power_w,vram_used_mb,audio_queued_ms,audio_underruns,renderer,res,", plog); fputs(pl_names, plog); fputc('\n', plog);
 	plog_bytes = (unsigned long)ftell(plog); fflush(plog);
 }
 static void plog_line(uint64_t now, double low1_ms, unsigned gd, unsigned fd, double cpu_proc) {
@@ -515,13 +525,15 @@ static void plog_line(uint64_t now, double low1_ms, unsigned gd, unsigned fd, do
 	if (!plog) { plog_open(now); if (!plog) return; }
 	if (plog_bytes > PERFLOG_CAP) { fprintf(plog, "# size cap reached, log stopped\n"); fclose(plog); plog = 0; plog_dead = 1; return; }
 	const MetricsSnapshot *p = &snap; const int m = p->machine;
-	int n = fprintf(plog, "%.1f,%.1f,%.2f,%.2f,%.2f,%.1f,%.2f,%.1f,%.2f,%.2f,%u,%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.0f,%u,%u,%s,%dx%d\n",
+	int n = fprintf(plog, "%.1f,%.1f,%.2f,%.2f,%.2f,%.1f,%.2f,%.1f,%.2f,%.2f,%u,%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.0f,%u,%u,%s,%dx%d",   /* (no newline: the renderer breakdown follows) */
 	            (now - plog_t0) / 1e6, p->fps, p->frame_ms_avg, p->frame_ms_max, low1_ms, m ? p->low1_fps : -1.0f, p->speed, p->window_fps, p->render_ms, p->present_ms,
 	            p->scenes, p->draws, gd, fd, p->builds, p->build_ms, p->tex_uploads, p->waits_ms, p->skipped,
 	            m ? p->cpu_game_pct : (float)cpu_proc, m ? p->cpu_total_pct : -1.0f, m ? p->threads : -1, m ? p->ram_game_mb : -1.0f, m ? p->ram_used_mb : -1.0f,
 	            m ? p->gpu_pct : -1.0f, m ? p->gpu_clock_mhz : -1.0f, m ? p->gpu_temp_c : -1.0f, m ? p->gpu_power_w : -1.0f, m ? p->vram_used_mb : -1.0f,
 	            p->audio_ms, p->audio_underruns, p->gpu_backend ? "gpu" : "soft", win_w, win_h);
 	if (n > 0) plog_bytes += (unsigned long)n;
+	for (int k = 0; k < PL_N; k++) { int m2 = fprintf(plog, ",%.2f", pl_ms[k]); if (m2 > 0) plog_bytes += (unsigned long)m2; }
+	fputc('\n', plog); plog_bytes++;
 	fflush(plog);
 }
 
@@ -566,6 +578,11 @@ static void maybe_tick(uint64_t now) {
 		snap.tex_uploads = (float)rc_uploads / rc_frames; snap.waits_ms = (float)(rc_wait_us / 1000.0 / rc_frames); snap.skipped = (float)rc_skipped / rc_frames;
 	} else snap.builds = snap.build_ms = snap.tex_uploads = snap.waits_ms = snap.skipped = -1;
 	rc_frames = rc_builds = rc_uploads = rc_skipped = rc_build_us = rc_wait_us = 0;
+	for (int k = 0; k < PL_N; k++) {
+		const uint32_t nf = k < PL_GPU0 ? pl_frames : pl_gpu_frames;
+		pl_ms[k] = nf ? (float)((k == PL_OTHER ? (double)(int64_t)pl_acc[k] : (double)pl_acc[k]) / 1000.0 / nf) : -1.0f; pl_acc[k] = 0;
+	}
+	pl_frames = pl_gpu_frames = 0;
 	if (metrics_costs_wanted()) sampler_start();
 	rebuild_osd(metrics_osd_level());
 	maybe_dump_osd();
@@ -597,6 +614,9 @@ void metrics_game_frame(void) {
 	extern int gfx_gpu_overlay_costs(uint32_t *builds, uint32_t *uploads, uint32_t *skipped, uint64_t *build_us, uint64_t *wait_us);
 	uint32_t c_b = 0, c_u = 0, c_s = 0; uint64_t c_bu = 0, c_w = 0;
 	int c_have = metrics_costs_wanted() && gfx_gpu_overlay_costs(&c_b, &c_u, &c_s, &c_bu, &c_w);
+	uint64_t lw = __atomic_exchange_n(&acc_lock_wait_us, 0, __ATOMIC_RELAXED), wl = __atomic_exchange_n(&acc_win_lock_us, 0, __ATOMIC_RELAXED), wa = __atomic_exchange_n(&acc_win_acq_us, 0, __ATOMIC_RELAXED);
+	extern int gfx_gpu_perf_steps(uint64_t *us, int n);
+	uint64_t st[PL_STEPS] = {0}; int st_have = c_have && gfx_gpu_perf_steps(st, PL_STEPS) == PL_STEPS;
 
 	pthread_mutex_lock(&mx);
 	lf_render_us = render_us; lf_scenes = scenes; lf_draws = draws;
@@ -606,6 +626,14 @@ void metrics_game_frame(void) {
 	if (last_game_t) gring_push(now, (uint32_t)(now - last_game_t));
 	last_game_t = now;
 	if (c_have) { rc_have = 1; rc_frames++; rc_builds += c_b; rc_uploads += c_u; rc_skipped += c_s; rc_build_us += c_bu; rc_wait_us += c_w; }
+	if (metrics_costs_wanted()) {
+		pl_frames++; pl_acc[PL_LOCK_WAIT] += lw; pl_acc[PL_WIN_LOCK] += wl; pl_acc[PL_WIN_ACQ] += wa;
+		if (st_have) {   /* (other: the total less the named steps -- signed, as RECOMP_GPU_STATS prints it; the syncs at present and guest-write time are outside the total) */
+			pl_gpu_frames++; int64_t other = (int64_t)st[0];
+			for (int k = 0; k < PL_STEPS; k++) { pl_acc[PL_GPU0 + k] += st[k]; if (k && k != 7 && k != 8) other -= (int64_t)st[k]; }   /* (7, 8: texture hash and upload are inside binding) */
+			pl_acc[PL_OTHER] += (uint64_t)other;   /* (wraps if negative; read back as signed below) */
+		}
+	}
 	pthread_mutex_unlock(&mx);
 
 	maybe_tick(now);

@@ -15,7 +15,9 @@
  *     cc -O1 -g -Wall -Wno-unused-function -I ../core -I ../platform metrics_test.c ../platform/platform_posix.c -o /tmp/metrics_test -lpthread -ldl && /tmp/metrics_test
  * Windows (llvm-mingw):
  *     clang -O1 -g -Wall -Wno-unused-function -I ../core -I ../platform metrics_test.c ../platform/platform_win32.c -o metrics_test.exe -static -lpthread -lwinmm && ./metrics_test.exe
- * -DFAIL_BEFORE builds only the checks that also compile against a runtime without these additions.
+ * -DFAIL_BEFORE builds only the checks that also compile against a runtime without these additions;
+ * -DFAIL_BEFORE_DECKPERF leaves out only the renderer-breakdown feeding (DECKPERF-01): against the runtime before it,
+ * its column checks fail.
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -35,6 +37,20 @@ int gfx_gpu_overlay_costs(uint32_t *builds, uint32_t *uploads, uint32_t *skipped
 int settings_has(const char *key) { (void)key; return 0; }
 int settings_int(const char *key, int def) { (void)key; return def; }
 int settings_game_dir(char *buf, int n) { (void)n; buf[0] = 0; return 1; }
+/* (DECKPERF-01) the draw path's steps, fixed per frame, in gfx.h's GFX_PERF_* order (us): total 5000 = setup 400 + vfetch 600 +
+ * shader 300 + pipe 100 + vbuf 200 + bind 700 (its hash 250, upload 50) + scene sync 0 + pass 900 + submit 1500 + other 300 */
+int gfx_gpu_perf_steps(uint64_t *us, int n) {
+	static const uint64_t v[12] = { 5000, 400, 600, 300, 100, 200, 700, 250, 50, 0, 900, 1500 };
+	int k = 0; for (; k < n && k < 12; k++) us[k] = v[k]; return k;
+}
+/* one data row's field by its column name (the column row's); NAN if there is none */
+static double csv_field(const char *hdr, const char *row, const char *name) {
+	int want = -1, i = 0; size_t nl = strlen(name);
+	for (const char *p = hdr; *p; i++) { size_t l = strcspn(p, ",\r\n"); if (l == nl && !strncmp(p, name, nl)) { want = i; break; } p += l; if (*p != ',') break; p++; }
+	if (want < 0) return 0.0 / 0.0;
+	const char *p = row; for (i = 0; i < want && p; i++) { p = strchr(p, ','); if (p) p++; }
+	return p ? atof(p) : 0.0 / 0.0;
+}
 
 static int fails, oks;
 static void check(int ok, const char *what) { printf("%s %s\n", ok ? "ok  " : "FAIL", what); if (ok) oks++; else fails++; }
@@ -156,22 +172,37 @@ int main(void) {
 		check(!metrics_perflog_on() || 1, "perf log state resolvable");
 		metrics_perflog_set(1);
 		check(metrics_perflog_on() == 1 && metrics_costs_wanted(), "the log switch is on and asks the renderer for its costs");
-		for (int i = 0; i < 150; i++) { sleep_ms(20); metrics_game_frame(); }   /* ~3 s */
+		costs_on = 1;   /* (the GPU backend: costs and steps every frame) */
+		for (int i = 0; i < 150; i++) { sleep_ms(20);
+#ifndef FAIL_BEFORE_DECKPERF
+			metrics_add_lock_wait(3000); metrics_add_window_lock(1200); metrics_add_window_acquire(12000);   /* a frame's: 3 ms waited, 1.2 ms held, 12 ms acquire */
+#endif
+			metrics_game_frame(); }   /* ~3 s */
 		char nm[96] = "", path[256];
 		int have = metrics_perflog_path(nm, sizeof nm);
 		check(have && !strncmp(nm, "perflog/perf-", 13), "the log file is named perflog/perf-<date>-<time>.csv");
 		snprintf(path, sizeof path, "%s/%s", dir, nm + 8);
-		FILE *f = fopen(path, "r"); int hdr = 0, rows = 0, cols_ok = 1, ncol = 0, bad = 0; char ln[1024];
+		FILE *f = fopen(path, "r"); int hdr = 0, rows = 0, cols_ok = 1, ncol = 0, bad = 0; char ln[1024], colrow[1024] = "", last[1024] = "";
 		while (f && fgets(ln, sizeof ln, f)) {
 			if (ln[0] == '#') { hdr++; if (strstr(ln, "/home") || strstr(ln, "C:\\")) bad = 1; continue; }
-			if (!strncmp(ln, "t_s,", 4)) { ncol = 1; for (char *c = ln; *c; c++) ncol += *c == ','; continue; }
+			if (!strncmp(ln, "t_s,", 4)) { snprintf(colrow, sizeof colrow, "%s", ln); ncol = 1; for (char *c = ln; *c; c++) ncol += *c == ','; continue; }
 			int n = 1; for (char *c = ln; *c; c++) n += *c == ','; rows++; if (n != ncol) cols_ok = 0;
+			snprintf(last, sizeof last, "%s", ln);
 		}
 		if (f) fclose(f);
 		check(f && hdr >= 5, "the log starts with a header (version, CPU, GPU, renderer)");
 		check(rows >= 2 && rows <= 4, "about one line a second");
 		check(ncol >= 30 && cols_ok, "every line has as many fields as the column row");
 		check(!bad, "no paths in the log");
+		/* (DECKPERF-01) the renderer breakdown: per game frame, ms -- the lock wait and hold and the acquire as fed, the steps as
+		 * gfx_gpu_perf_steps gave them, other = total less the named steps (hash and upload are inside binding) */
+		{ double lw = csv_field(colrow, last, "lock_wait_ms"), wl = csv_field(colrow, last, "window_lock_ms"), aq = csv_field(colrow, last, "acquire_ms");
+		  double dp = csv_field(colrow, last, "draw_path_ms"), su = csv_field(colrow, last, "submit_ms"), th = csv_field(colrow, last, "texhash_ms"), ot = csv_field(colrow, last, "other_ms");
+		  printf("     breakdown row: lock_wait %.2f window_lock %.2f acquire %.2f draw_path %.2f submit %.2f texhash %.2f other %.2f\n", lw, wl, aq, dp, su, th, ot);
+		  check(lw > 2.99 && lw < 3.01 && wl > 1.19 && wl < 1.21, "lock_wait_ms and window_lock_ms: the render path's wait for the renderer lock, the window's hold");
+		  check(aq > 11.99 && aq < 12.01, "acquire_ms: the window's swapchain acquire wait");
+		  check(dp > 4.99 && dp < 5.01 && su > 1.49 && su < 1.51 && th > 0.24 && th < 0.26, "draw_path_ms and its steps, per game frame");
+		  check(ot > 0.29 && ot < 0.31, "other_ms: the draw path's total less its named steps"); }
 		metrics_perflog_set(0); sleep_ms(550); metrics_game_frame();
 		check(!metrics_perflog_path(nm, sizeof nm), "switching the log off closes the file");
 		unlink(path); rmdir(dir);
