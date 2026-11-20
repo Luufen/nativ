@@ -357,6 +357,8 @@ void window_set_aspect(int mode) {
 	aspect_mode = mode;
 	settings_set_str("aspect", aspect_name(mode)); settings_save();
 }
+int window_fullscreen_flag = -1;   /* (RECOMPLAUNCHER-01 L4) the game's --fullscreen 1 / --windowed 0 (main.c), -1 the setting */
+static int fs_flag_pending;
 int window_get_fullscreen(void) { return win && (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN) != 0; }
 void window_set_fullscreen(int on) {
 	if (win) SDL_SetWindowFullscreen(win, on != 0);
@@ -1216,7 +1218,10 @@ void window_run(void *(*fn)(void *), void *arg) {
 #ifdef __ANDROID__
 	SDL_SetWindowFullscreen(win, true);   /* (a device: the whole screen, the system bars hidden -- no window to have) */
 #else
-	if (settings_int("fullscreen", 0)) SDL_SetWindowFullscreen(win, true);
+	{	const int fs = window_fullscreen_flag >= 0 ? window_fullscreen_flag : settings_int("fullscreen", 0);   /* (the game's --fullscreen / --windowed: this run only) */
+		if (fs) SDL_SetWindowFullscreen(win, true);
+		fs_flag_pending = fs && !settings_int("fullscreen", 0);   /* (its fullscreen event isn't the player's choice: not saved) */
+	}
 #endif
 	if (gpu) overlay_init(gpu, win, SDL_GetGPUSwapchainTextureFormat(gpu, win));
 	SDL_Gamepad *pad = 0;
@@ -1240,7 +1245,8 @@ void window_run(void *(*fn)(void *), void *arg) {
 			if (e.type == SDL_EVENT_QUIT) { buttons = 0; touch_down = 0; gamepad_touch_release(); continue; }
 			/* fullscreen however it was entered or left -- the window's own button (macOS's green one), the OS's
 			 * shortcut, the menu -- is the setting: the next game starts the same way */
-			if ((e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN || e.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) && settings_int("fullscreen", 0) != (e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN)) {
+			if (e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN && fs_flag_pending) fs_flag_pending = 0;   /* (the start's --fullscreen taking effect) */
+			else if ((e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN || e.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) && settings_int("fullscreen", 0) != (e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN)) {
 				settings_set_int("fullscreen", e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN); settings_save();
 			}
 			/* the overlay itself: always live, open or not, so it can always be reached and always

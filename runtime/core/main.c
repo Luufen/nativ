@@ -910,6 +910,12 @@ int main(int argc, char **argv) {
 		if (path[0]) settings_load_shared(path);
 	}
 	if (argc > 3) budget = strtoull(argv[3], 0, 0);
+	for (int i = 4; i < argc; i++) {   /* (RECOMPLAUNCHER-01 L4) the game's own flags, after its three: vitarecomp run <title> -- <flags>, nativ --play <title> --fullscreen */
+		extern int window_fullscreen_flag;
+		if (!strcmp(argv[i], "--fullscreen")) window_fullscreen_flag = 1;
+		else if (!strcmp(argv[i], "--windowed")) window_fullscreen_flag = 0;
+		else fprintf(stderr, "unknown game flag %s, ignored (the game's flags: --fullscreen, --windowed)\n", argv[i]);
+	}
 	if (getenv("RECOMP_LOG")) nlog = strtoull(getenv("RECOMP_LOG"), 0, 0);
 	if (getenv("RECOMP_LOG_FROM")) log_from = strtoull(getenv("RECOMP_LOG_FROM"), 0, 0);   /* and every call from #n on */
 	recomp_mem = plat_reserve(1ull << 32);

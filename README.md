@@ -11,6 +11,40 @@ from a Vita you own, and Sony's firmware update file.
 Generic fixes are also offered upstream as pull requests. Problems with these builds belong in
 [this fork's issues](https://github.com/Luufen/nativ---Updated-30-games-120-widescreen/issues), not upstream's.
 
+## Download and start
+
+Each release has, with `SHA256SUMS` over them:
+
+- **Windows:** `ProjectNativ-<tag>-windows.zip`. Extract the whole zip, then open `ProjectNativ\Project Nativ.exe`.
+- **Linux, Steam Deck:** `ProjectNativ-<tag>-linux.AppImage`: mark it executable and run it.
+- **Linux without FUSE** (or without AppImages): `ProjectNativ-<tag>-linux.tar.gz`, the same install as one folder.
+  `tar xzf ProjectNativ-<tag>-linux.tar.gz`, then run `ProjectNativ/Project Nativ.sh` (Steam: add that file as a
+  non-Steam game). Nothing is mounted or unpacked at start.
+
+**Portable:** the zip and the tarball keep everything in their own folder: your games and saves in `library/`, the
+settings in `settings/`, caches in `cache/` (a file named `portable` at the top says so; delete it to use your user
+folder instead). To update, extract the new release over the same folder: those three folders stay. If you had a
+library in your user folder (`%LOCALAPPDATA%\ProjectNativ\Nativ\library`, `~/.local/share/ProjectNativ/Nativ/library`),
+the launcher uses it from there and asks once whether to move it into the folder or keep it where it is; your settings
+are copied in. The AppImage keeps using your user folder; put a file named `portable` beside the AppImage, or start it
+with `--data-dir <folder>`, to keep everything in one folder there too.
+
+The launcher is the only program you start. It also takes a command line (`nativ --help`, on Windows
+`"Project Nativ.exe" --help`), for scripts, Steam and other launchers:
+
+| Flag | What it does |
+|---|---|
+| `--list` | The library, one game per line: title, state (`built`, `added`, `pack`), version, name. |
+| `--play <title> [-- <game flags>]` | Starts a game as Play does (built first when needed), without the launcher window. |
+| `--build <title>` | Builds a game in the library. |
+| `--add <folder>` | Searches a folder and adds what's ready (games, updates, add-ons, licences, firmware). |
+| `--data-dir <dir>` | Keeps the library, settings and caches in that folder. |
+| `--fullscreen`, `--windowed` | The launcher window, or with `--play` the game, fullscreen or in a window, this time only. |
+
+Exit status 0 means done, 1 that the work failed, 2 a bad command line or a title that isn't in the library. The game's
+own flags after `--` are `--fullscreen` and `--windowed`. The variables `ATIV_DUMP`, `ATIV_PREFS` and `ATIV_TASK` still
+work.
+
 ## Tested games
 
 A pack is a game's settings file: it tells Nativ how to rebuild that game from your copy, which it recognises by the
@@ -263,6 +297,7 @@ Your games, firmware, licences, builds and saves live in one library folder:
 - `dump/` inside a checkout, which git ignores;
 - otherwise your per-user data folder: `~/Library/Application Support/ProjectNativ/Nativ/library` on macOS, under
   `~/.local/share` on Linux and under `%LOCALAPPDATA%` on Windows;
+- `library/` in a portable install (a file named `portable` at its top) or in the launcher's `--data-dir <folder>`;
 - or wherever `ATIV_DUMP` points.
 
 ### Installing

@@ -4,9 +4,11 @@ binary userdata/<user>/config/shortcuts.vdf of every Steam user on this computer
 
   steam.py list                                  where Steam is, whether it runs, and the games it has from us:
                                                  "steam <folder|->", "running 0|1", "users <n>", then "in <title> <appid>"
-  steam.py add <title> --exe <launcher> --name <name> [--icon <png>] [--cover <png>]
+  steam.py add <title> --exe <launcher> --name <name> [--icon <png>] [--cover <png>] [--data-dir <dir>]
                                                  the game as a shortcut: <launcher> --play <title>, tagged "Project
-                                                 Nativ"; its cover as the shortcut's Steam artwork (grid, hero)
+                                                 Nativ"; its cover as the shortcut's Steam artwork (grid, hero);
+                                                 --data-dir: the launcher's --data-dir <dir> before it (a library kept
+                                                 in its own folder, RECOMPLAUNCHER-01)
   steam.py remove <title>                        our shortcut for it removed (no other shortcut is touched)
   ... add|remove ... --restart                   Steam running: asked to quit (steam -shutdown), the change made once
                                                  it has, Steam started again (in Steam's Game Mode its session starts
@@ -16,7 +18,7 @@ binary userdata/<user>/config/shortcuts.vdf of every Steam user on this computer
 Steam keeps the list in memory while it runs and writes it back when it closes, so a change made while it runs is lost:
 add and remove refuse then (exit 3, "Steam is running"). Before each write the file is copied beside itself
 (shortcuts.vdf.<time>.nativ-bak, the newest 5 kept). A shortcut is ours when its tags hold "Project Nativ" and its launch
-options are "--play <title>"; every other entry is kept byte for byte (its key too: Steam renumbers when it saves).
+options are "--play <title>" (or "--data-dir <dir> --play <title>"); every other entry is kept byte for byte (its key too: Steam renumbers when it saves).
 ATIV_STEAM_DIR=<folder>: that Steam folder instead of the installed one; ATIV_STEAM_RUNNING=0|1: what the check finds;
 ATIV_STEAM_RUNNING_FILE=<file>: Steam runs while that file exists; ATIV_STEAM_CMD=<program>: Steam's program for
 -shutdown and the start (all for a test).
@@ -133,10 +135,21 @@ def shortcut_id(exe, name):
     return (binascii.crc32((exe + name).encode("utf-8")) & 0xFFFFFFFF) | 0x80000000
 
 
+def launch_words(s):
+    """a shortcut's launch options as words, a "quoted path" one word"""
+    import re
+    return [q if q or not w else w for q, w in re.findall(r'"([^"]*)"|(\S+)', s)]
+
+
+def play_options(title, data_dir=None):
+    return (f'--data-dir "{data_dir}" ' if data_dir else "") + f"--play {title}"
+
+
 def ours(fields, title=None):
     tags = fields.get("tags")
     tagged = isinstance(tags, dict) and TAG in tags.values()
-    opts = str(fields.get("launchoptions", "")).split()
+    opts = launch_words(str(fields.get("launchoptions", "")))
+    if len(opts) == 4 and opts[0] == "--data-dir": opts = opts[2:]
     return tagged and len(opts) == 2 and opts[0] == "--play" and (title is None or opts[1] == title)
 
 
@@ -148,11 +161,12 @@ def splice(data, title, new=None):
     gone = [f.get("appid", 0) & 0xFFFFFFFF for k, raw, f in entries if ours(f, title)]
     added = None
     if new:
-        name, exe, start_dir, icon = new
+        name, exe, start_dir, icon = new[:4]
+        options = new[4] if len(new) > 4 else play_options(title)
         added = shortcut_id(exe, name)
         keys = [int(k) for k, _ in kept if k.isdigit()]
         key = str(max(keys) + 1 if keys else 0)
-        kept.append((key, entry_bytes(key, added, name, exe, start_dir, icon, f"--play {title}")))
+        kept.append((key, entry_bytes(key, added, name, exe, start_dir, icon, options)))
     return head + b"".join(raw for _, raw in kept) + tail, gone, added
 
 
@@ -361,7 +375,7 @@ def main(argv):
         if "--exe" not in o or "--name" not in o:
             print("steam add <title> --exe <launcher> --name <name> [--icon <png>] [--cover <png>]", file=sys.stderr); return 2
         exe = o["--exe"]
-        new = (o["--name"], f'"{exe}"', f'"{os.path.dirname(exe)}"', o.get("--icon", ""))
+        new = (o["--name"], f'"{exe}"', f'"{os.path.dirname(exe)}"', o.get("--icon", ""), play_options(title, o.get("--data-dir")))
         return change(title, new, o.get("--cover"), restart=restart)
     print(__doc__, file=sys.stderr)
     return 2
@@ -404,6 +418,13 @@ def selftest():
 
         assert main(add) == 0 and open(p1, "rb").read() == d1, "adding again changes nothing"
         main(["add", "PCSZ00043", "--exe", exe, "--name", "Second"])
+        # --data-dir: the launcher's own folder for the library, quoted (a space in it), and the shortcut still ours
+        main(["add", "PCSZ00044", "--exe", exe, "--name", "Third", "--data-dir", os.path.join(tmp, "My Games")])
+        _, e5, _ = parse(open(p1, "rb").read())
+        f5 = [f for _, _, f in e5 if f.get("appname") == "Third"][0]
+        assert f5["launchoptions"] == f'--data-dir "{os.path.join(tmp, "My Games")}" --play PCSZ00044' and ours(f5, "PCSZ00044") and not ours(f5, "PCSZ00042"), f5["launchoptions"]
+        assert launch_words(f5["launchoptions"]) == ["--data-dir", os.path.join(tmp, "My Games"), "--play", "PCSZ00044"]
+        assert main(["remove", "PCSZ00044"]) == 0 and not any(f.get("appname") == "Third" for _, _, f in parse(open(p1, "rb").read())[1])
         assert main(["remove", "PCSZ00042"]) == 0
         d3 = open(p1, "rb").read()
         _, e3, _ = parse(d3)

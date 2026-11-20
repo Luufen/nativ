@@ -6,6 +6,11 @@
 #   linux    ProjectNativ-<tag>-linux.AppImage: the install (dev/linux-install.sh) as one file the player marks
 #            executable and runs, a Steam Deck's non-Steam game too; made on Linux (appimagetool and its runtime fetched
 #            once, pinned by SHA-256)
+#            and ProjectNativ-<tag>-linux.tar.gz beside it: the same install tree as one ProjectNativ folder, for a machine
+#            without FUSE or a player who'd rather not run an AppImage (extract it, run ProjectNativ/Project Nativ.sh)
+# The zip and the tarball are portable (RECOMPLAUNCHER-01 L2): a file named "portable" at their top keeps the library,
+# settings and caches in that folder (library/, settings/, cache/), so an update is extracting the new one over it; the
+# AppImage isn't (its folder can't be written: a "portable" file beside the AppImage, or --data-dir, does it there).
 # then SHA256SUMS over every download there (a release made on two machines: copy the other's in, run again with no OS).
 # The tag must be what's checked out, with nothing uncommitted: the installs' version.txt is the tag, which is what their
 # update check compares (vitarecomp update-check).
@@ -59,6 +64,10 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
 PY
 }
 
+portable() {   # the portable install's marker (launcher/hub.cpp portable_dir)
+  printf '%s\n' "This file keeps Project Nativ's library, settings and caches in this folder (library, settings, cache)." \
+    "To update, extract the new release over this folder: those three stay. Delete this file to use your user folder instead." > "$1/portable"
+}
 for os in "$@"; do
   W=$OUT/work-$os; rm -rf "$W"; mkdir -p "$W"; I=$W/ProjectNativ; Z=$OUT/ProjectNativ-$TAG-$os.zip; rm -f "$Z"
   case $os in
@@ -92,7 +101,7 @@ for os in "$@"; do
         fi
       fi;;
     windows)
-      bash "$H/windows-install.sh" "$I"
+      bash "$H/windows-install.sh" "$I"; portable "$I"
       # every file with its size: the launcher checks them at start (a zip unpacked part way lost a player Python's modules)
       python3 - "$I" <<'PY'
 import os, sys
@@ -108,6 +117,12 @@ PY
     linux)
       [[ $(uname) == Linux ]] || { echo "release.sh: the Linux install is made on Linux"; exit 1; }
       bash "$H/linux-install.sh" "$I"; Z=$OUT/ProjectNativ-$TAG-linux.AppImage; rm -f "$Z"
+      # the tarball first, from the install as linux-install.sh left it (its Project Nativ.sh the start), before the
+      # AppImage's own files go in: names sorted and owners dropped, so the same tree makes the same archive
+      TGZ=$OUT/ProjectNativ-$TAG-linux.tar.gz; rm -f "$TGZ"; portable "$I"
+      tar -C "$W" --sort=name --owner=0 --group=0 --numeric-owner -cf - ProjectNativ | gzip -n -6 > "$TGZ"
+      rm -f "$I/portable"   # (not in the AppImage)
+      echo "$TGZ ($(du -h "$TGZ" | cut -f1))"
       AT_VER=1.9.1 AT_SHA=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0   # appimagetool
       RT_VER=20251108 RT_SHA=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d   # its runtime (static: no libfuse2 needed)
       DL=${ATIV_LINUX_TOOLCHAIN:-$HOME/toolchains/ativ-linux}/dl; mkdir -p "$DL"
@@ -126,5 +141,5 @@ PY
   echo "$Z ($(du -h "$Z" | cut -f1))"
 done
 
-(cd "$OUT" && rm -f SHA256SUMS && shopt -s nullglob && sha ProjectNativ-"$TAG"-*.{zip,dmg,AppImage} > SHA256SUMS && cat SHA256SUMS)
-echo "to publish: gh release create $TAG $OUT/ProjectNativ-$TAG-*.{zip,dmg,AppImage} $OUT/SHA256SUMS --repo ${NATIV_RELEASES:-<owner>/<repo>} --title \"Project Nativ $TAG\" --notes-file <notes.md>"
+(cd "$OUT" && rm -f SHA256SUMS && shopt -s nullglob && sha ProjectNativ-"$TAG"-*.{zip,dmg,AppImage,tar.gz} > SHA256SUMS && cat SHA256SUMS)
+echo "to publish: gh release create $TAG $OUT/ProjectNativ-$TAG-*.{zip,dmg,AppImage,tar.gz} $OUT/SHA256SUMS --repo ${NATIV_RELEASES:-<owner>/<repo>} --title \"Project Nativ $TAG\" --notes-file <notes.md>"
