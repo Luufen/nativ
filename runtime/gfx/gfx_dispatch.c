@@ -30,28 +30,35 @@ static void gfx_lock_init(void) { pthread_mutexattr_t a; pthread_mutexattr_init(
 __thread int gfx_host_depth;   /* inside the lock below: guest memory this thread touches now is the graphics code's own access (gfx_gpu.c's read watch) */
 int waitstats_on(void); uint64_t waitstats_now(void); void waitstats_begin(uint64_t t0); void waitstats_lock(uint64_t t0); void waitstats_held(uint64_t t0);
 static __thread uint64_t gfx_hold_t0; static __thread int gfx_hold_depth;   /* (RECOMP_WAIT_STATS: this thread's outermost hold of the lock) */   /* (debug/waitstats.c: RECOMP_WAIT_STATS, the time threads queue for this lock) */
-static void gfx_lock_take(void) {
+static __thread int gfx_my_depth;   /* this thread's holds of the lock (any entry point): a drain only from outside it */
+static void aq_drain(void);         /* (DECKPERF-02, below: the queued draws done first) */
+static __thread const char *aq_why;   /* the entry point taking the lock (RECOMP_GFX_ASYNC_STATS: whose drains wait) */
+static void gfx_lock_take_raw(void) {   /* the lock alone, the queue left running: the window thread's present (it needs the device, not the draws) and the draw worker */
 	pthread_once(&gfx_lock_once, gfx_lock_init);
-	if (!waitstats_on()) { pthread_mutex_lock(&gfx_lock); return; }
+	if (!waitstats_on()) { pthread_mutex_lock(&gfx_lock); gfx_my_depth++; return; }
 	if (pthread_mutex_trylock(&gfx_lock)) { const uint64_t t0 = waitstats_now(); waitstats_begin(t0); pthread_mutex_lock(&gfx_lock); waitstats_lock(t0); }
 	if (!gfx_hold_depth++) gfx_hold_t0 = waitstats_now();
+	gfx_my_depth++;
 }
-static void gfx_lock_give(void) { if (waitstats_on() && !--gfx_hold_depth) waitstats_held(gfx_hold_t0); pthread_mutex_unlock(&gfx_lock); }
-#define LOCKED(...) do { gfx_lock_take(); gfx_host_depth++; __VA_ARGS__; gfx_host_depth--; gfx_lock_give(); } while (0)
+static void gfx_lock_take(void) { if (!gfx_my_depth) aq_drain(); gfx_lock_take_raw(); }
+static void gfx_lock_give(void) { gfx_my_depth--; if (waitstats_on() && !--gfx_hold_depth) waitstats_held(gfx_hold_t0); pthread_mutex_unlock(&gfx_lock); }
+#define LOCKED(...) do { aq_why = __func__; gfx_lock_take(); gfx_host_depth++; __VA_ARGS__; gfx_host_depth--; gfx_lock_give(); } while (0)
 /* (DECKPERF-01) the four timed entry points below (scene begin/end, draw, present): while the performance log or the full
  * overlay collects costs, the time this thread waited for the lock -- metrics.c's lock_wait_ms, the part of render_ms
  * that is another thread's hold (the window thread's present, below), not the renderer's own work. A trylock first:
  * uncontended it adds no clock read */
 static void gfx_lock_take_m(void) {
 	if (waitstats_on() || !metrics_costs_wanted()) { gfx_lock_take(); return; }
+	if (!gfx_my_depth) aq_drain();
 	pthread_once(&gfx_lock_once, gfx_lock_init);
 	if (pthread_mutex_trylock(&gfx_lock)) { const uint64_t t0 = now_us(); pthread_mutex_lock(&gfx_lock); metrics_add_lock_wait(now_us() - t0); }
+	gfx_my_depth++;
 }
-#define LOCKED_M(...) do { gfx_lock_take_m(); gfx_host_depth++; __VA_ARGS__; gfx_host_depth--; gfx_lock_give(); } while (0)
+#define LOCKED_M(...) do { aq_why = __func__; gfx_lock_take_m(); gfx_host_depth++; __VA_ARGS__; gfx_host_depth--; gfx_lock_give(); } while (0)
 /* the same lock for the window thread's own SDL_GPU calls (window.c's present loop, RECOMP_WINDOW_LOCK); with costs
  * collected, how long it holds it (metrics.c's window_lock_ms: blit, overlay, submit and present under the lock) */
 static __thread uint64_t win_hold_t0; static __thread int win_hold_depth;
-void gfx_lock_enter(void) { gfx_lock_take(); if (!win_hold_depth++) win_hold_t0 = metrics_costs_wanted() ? now_us() : 0; }
+void gfx_lock_enter(void) { gfx_lock_take_raw(); if (!win_hold_depth++) win_hold_t0 = metrics_costs_wanted() ? now_us() : 0; }
 void gfx_lock_leave(void) { if (!--win_hold_depth && win_hold_t0) metrics_add_window_lock(now_us() - win_hold_t0); gfx_lock_give(); }
 
 static int gpu_backend(void) {
@@ -148,10 +155,15 @@ static const GfxTarget *transient_depth(const GfxTarget *t, GfxTarget *out) {
 	out->ds_background_depth = 1.0f; out->ds_background_stencil = 0; out->ds_force_load = out->ds_force_store = 0;
 	return out;
 }
-void gfx_begin_scene(const GfxTarget *t) {
-	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
+static void begin_body(const GfxTarget *t) {   /* (under the lock) */
 	GfxTarget dims, tdepth;
-	LOCKED_M(gfxcap_target_scene(t); gfxcap_scene(t); gfxcov_scene(t); t = scene_dims(t, &dims); t = transient_depth(t, &tdepth); scene_target = *t; if (gpu_backend()) gfx_gpu_begin_scene(t); else gfx_soft_begin_scene(t));
+	gfxcap_target_scene(t); gfxcap_scene(t); gfxcov_scene(t); t = scene_dims(t, &dims); t = transient_depth(t, &tdepth); scene_target = *t; if (gpu_backend()) gfx_gpu_begin_scene(t); else gfx_soft_begin_scene(t);
+}
+static int aq_push_op(int op, const void *v);   /* (DECKPERF-02, below: 1 = queued for the worker) */
+void gfx_begin_scene(const GfxTarget *t) {
+	if (aq_push_op(1, t)) { if (metrics_on()) metrics_add_scene(); return; }
+	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
+	LOCKED_M(begin_body(t));
 	if (m) { metrics_add_render(now_us() - t0); metrics_add_scene(); }
 }
 static uint64_t presented;   /* frames presented so far (point_draw_seen's log line) */
@@ -197,12 +209,107 @@ static int roundtrip_skip(const GfxDraw *d) {
 	}
 	return 0;
 }
+static void draw_body(const GfxDraw *d) {   /* (under the lock) */
+	GfxDraw tmp;
+	rc_on_draw(d); gfxcap_draw(d); gfxcov_draw(d);
+	if (!roundtrip_skip(d)) { d = backend_draw(d, &tmp); if (gpu_backend()) gfx_gpu_draw(d); else gfx_soft_draw(d); }
+}
+
+/* ---- (DECKPERF-02) RECOMP_GFX_ASYNC=1: a draw's translation on a renderer worker thread instead of the game's.
+ * On the Steam Deck the game's render thread is the frame's critical path (Uncharted's climbing: 19-29 ms of CPU a frame,
+ * 6-12 ms of it gfx_draw's translation). A GfxDraw is a value (guest addresses, no host pointers), and the console's GPU
+ * reads a scene's vertex/uniform/texture memory only after the draw call anyway -- the game may not change it before the
+ * scene's notification -- so gfx_draw queues a copy and returns; the worker translates the queue in order under the lock.
+ * Every other entry point that takes the lock from outside it (scene begin/end, present, the guest-memory sync hooks,
+ * visibility, kicks) first waits until the draws queued so far are done (aq_drain), so all of them see the same state as
+ * before. The window thread's present takes the lock without draining (gfx_lock_enter: it needs the device, not the draws).
+ * Off (0) by default until measured; GPU backend only. */
+#define AQ_N 2048u
+typedef struct { uint32_t vaddr[32], vval[32], faddr[4], fval[4]; uint8_t nv, nf; } AqKick;   /* a scene kick's words (gfx_kick_async) */
+static void end_body(void); static void kick_body(const AqKick *k);
+typedef struct { int op; union { GfxDraw d; GfxTarget t; AqKick k; } u; } AqItem;   /* op 0 draw, 1 scene begin, 2 scene end, 3 kick */
+static AqItem *aq; static uint64_t aq_head, aq_tail;   /* head: pushed (under aq_m); tail: done (the worker's, atomic) */
+static pthread_mutex_t aq_m = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t aq_work = PTHREAD_COND_INITIALIZER, aq_done = PTHREAD_COND_INITIALIZER;
+static int aq_sleeping, aq_started;
+static __thread int aq_is_worker;
+static int aq_on(void) {
+	static int on = -1;
+	if (on < 0) { const char *e = getenv("RECOMP_GFX_ASYNC"); on = e && *e && *e != '0' && gpu_backend(); if (on) fprintf(stderr, "    gfx: draws translated on a worker thread (RECOMP_GFX_ASYNC)\n"); }
+	return on;
+}
+static void *aq_worker(void *arg) {
+	(void)arg; aq_is_worker = 1;
+	{ extern void waitstats_name(const char *n); waitstats_name("gfx_draw_worker"); }
+	for (;;) {
+		pthread_mutex_lock(&aq_m);
+		uint64_t t = __atomic_load_n(&aq_tail, __ATOMIC_RELAXED);
+		while (aq_head == t) { pthread_cond_broadcast(&aq_done); aq_sleeping = 1; pthread_cond_wait(&aq_work, &aq_m); aq_sleeping = 0; }
+		const uint64_t h = aq_head;
+		pthread_mutex_unlock(&aq_m);
+		const int m = metrics_on(); const uint64_t t0 = m ? now_us() : 0;
+		gfx_lock_take_raw(); gfx_host_depth++;
+		for (; t < h; t++) { const AqItem *it = &aq[t % AQ_N]; switch (it->op) { case 0: draw_body(&it->u.d); break; case 1: begin_body(&it->u.t); break; case 2: end_body(); break; default: kick_body(&it->u.k); } __atomic_store_n(&aq_tail, t + 1, __ATOMIC_RELEASE); }
+		gfx_host_depth--; gfx_lock_give();
+		if (m) metrics_add_render(now_us() - t0);
+		pthread_mutex_lock(&aq_m); pthread_cond_broadcast(&aq_done); pthread_mutex_unlock(&aq_m);
+	}
+	return 0;
+}
+static void aq_start(void) { aq = calloc(AQ_N, sizeof *aq); pthread_t th; if (aq && !pthread_create(&th, 0, aq_worker, 0)) { pthread_detach(th); __atomic_store_n(&aq_started, 1, __ATOMIC_RELEASE); } }
+static void aq_push(int op, const void *v) {
+	pthread_mutex_lock(&aq_m);
+	while (aq_head - __atomic_load_n(&aq_tail, __ATOMIC_ACQUIRE) >= AQ_N) { pthread_cond_signal(&aq_work); pthread_cond_wait(&aq_done, &aq_m); }
+	AqItem *it = &aq[aq_head % AQ_N]; it->op = op;
+	if (op == 0) it->u.d = *(const GfxDraw *)v; else if (op == 1) it->u.t = *(const GfxTarget *)v; else if (op == 3) it->u.k = *(const AqKick *)v;
+	aq_head++;
+	if (aq_sleeping) pthread_cond_signal(&aq_work);
+	pthread_mutex_unlock(&aq_m);
+}
+/* RECOMP_GFX_ASYNC_STATS=1: per entry point, its drains a frame, how many found draws still queued, and the time waited --
+ * a report every 300 presented frames (the game thread's time lost to the drains, which the wait stats do not see) */
+static int aq_stats_on(void) { static int on = -1; if (on < 0) on = getenv("RECOMP_GFX_ASYNC_STATS") != 0; return on; }
+typedef struct { const char *name; uint64_t n, waited, us; } AqStat;
+static AqStat aq_st[32]; static int aq_nst; static pthread_mutex_t aq_st_m = PTHREAD_MUTEX_INITIALIZER;
+static void aq_stat(const char *name, int waited, uint64_t us) {
+	pthread_mutex_lock(&aq_st_m);
+	int i; for (i = 0; i < aq_nst && aq_st[i].name != name; i++) {}
+	if (i == aq_nst && aq_nst < 32) aq_st[aq_nst++].name = name;
+	if (i < 32) { aq_st[i].n++; aq_st[i].waited += (unsigned)waited; aq_st[i].us += us; }
+	pthread_mutex_unlock(&aq_st_m);
+}
+static void aq_stats_report(uint64_t frames) {
+	pthread_mutex_lock(&aq_st_m);
+	uint64_t tot = 0; for (int i = 0; i < aq_nst; i++) tot += aq_st[i].us;
+	fprintf(stderr, "    aq: %llu frames: drains wait %.2f ms/frame in all; per entry point: drains/frame, waiting/frame, ms/frame\n", (unsigned long long)frames, tot / 1e3 / (double)frames);
+	for (int i = 0; i < aq_nst; i++) if (aq_st[i].n) fprintf(stderr, "    aq:   %-24s %7.1f %7.1f %7.2f\n", aq_st[i].name ? aq_st[i].name : "?", aq_st[i].n / (double)frames, aq_st[i].waited / (double)frames, aq_st[i].us / 1e3 / (double)frames);
+	for (int i = 0; i < aq_nst; i++) aq_st[i].n = aq_st[i].waited = aq_st[i].us = 0;
+	pthread_mutex_unlock(&aq_st_m);
+}
+static void aq_drain(void) {   /* the draws queued so far (by any thread) done; not from the worker, not under the lock */
+	if (!__atomic_load_n(&aq_started, __ATOMIC_ACQUIRE) || aq_is_worker) return;
+	const int st = aq_stats_on(); const uint64_t t0 = st ? now_us() : 0; int waited = 0;
+	pthread_mutex_lock(&aq_m);
+	const uint64_t want = aq_head;
+	while (__atomic_load_n(&aq_tail, __ATOMIC_ACQUIRE) < want) { waited = 1; if (aq_sleeping) pthread_cond_signal(&aq_work); pthread_cond_wait(&aq_done, &aq_m); }
+	pthread_mutex_unlock(&aq_m);
+	if (st) aq_stat(aq_why, waited, waited ? now_us() - t0 : 0);
+}
+static int aq_scenes_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("RECOMP_GFX_ASYNC_SCENES"); on = !(e && *e == '0'); } return on; }
+static int aq_push_op(int op, const void *v) {
+	if (gfx_my_depth || !aq_on() || !aq_scenes_on() || !__atomic_load_n(&aq_started, __ATOMIC_ACQUIRE)) return 0;
+	aq_push(op, v); return 1;
+}
+int gfx_async_on(void) { return aq_on() && aq_scenes_on() && __atomic_load_n(&aq_started, __ATOMIC_ACQUIRE); }
+void gfx_async_settle(void) { if (!gfx_my_depth) aq_drain(); }   /* sceGpuSignalWait: waiting for the GPU = for the worker */
 void gfx_draw(const GfxDraw *d) {
 	video_sync_draw(d);
-	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
-	GfxDraw tmp;
 	if (gfx_prim_kind(d->prim) == GFX_PRIM_POINTS) point_draw_seen(d);
-	LOCKED_M(rc_on_draw(d); gfxcap_draw(d); gfxcov_draw(d); if (!roundtrip_skip(d)) { d = backend_draw(d, &tmp); if (gpu_backend()) gfx_gpu_draw(d); else gfx_soft_draw(d); });
+	if (!gfx_my_depth && aq_on()) {   /* (a draw from inside the lock -- a capture's replay -- stays in line) */
+		static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, aq_start);
+		if (__atomic_load_n(&aq_started, __ATOMIC_ACQUIRE)) { aq_push(0, d); if (metrics_on()) metrics_add_draw(); return; }
+	}
+	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
+	LOCKED_M(draw_body(d));
 	if (m) { metrics_add_render(now_us() - t0); metrics_add_draw(); }
 }
 void gfx_sync_to_guest(void) { LOCKED(if (gpu_backend()) gfx_gpu_sync_all()); }
@@ -224,16 +331,38 @@ static void *vis_poller(void *arg) {
 	for (;;) { plat_sleep_ns(250000); if (gfx_gpu_vis_deferred()) LOCKED(gfx_gpu_vis_flush(0)); }
 	return 0;
 }
+static void vis_poller_start(void) { static int started; if (!started) { started = 1; pthread_t t; if (!pthread_create(&t, 0, vis_poller, 0)) pthread_detach(t); } }
 int gfx_kick_defer(const uint32_t *addr, const uint32_t *val, int n) {
 	int r = 0; LOCKED(if (gpu_backend()) r = gfx_gpu_vis_defer(addr, val, n));
-	static int started; if (r && !started) { started = 1; pthread_t t; if (!pthread_create(&t, 0, vis_poller, 0)) pthread_detach(t); }
+	if (r) vis_poller_start();
 	return r;
 }
+static void kick_body(const AqKick *k) {   /* (under the lock, the worker's) the scene's kick, now that its draws are done: as gpu.c kick */
+	for (int i = 0; i < k->nv; i++) WR32(k->vaddr[i], k->vval[i]);
+	int r = k->nf && gpu_backend() ? gfx_gpu_vis_defer(k->faddr, k->fval, k->nf) : 0;
+	if (r) vis_poller_start();
+	else for (int i = 0; i < k->nf; i++) WR32(k->faddr[i], k->fval[i]);
+	if (gfx_kick_done_hook) gfx_kick_done_hook();
+}
+/* (DECKPERF-02) gpu.c's kick with the draws on the worker: its words (the ring status words, the scene's notifications) are
+ * written by the worker once the scene before them is translated, as the console's GPU writes them when it finishes. 1 =
+ * queued; 0 = not (no worker): gpu.c writes them itself */
+int gfx_kick_async(const uint32_t *vaddr, const uint32_t *vval, int nv, const uint32_t *faddr, const uint32_t *fval, int nf) {
+	AqKick k; if (nv > 32) nv = 32; if (nf > 4) nf = 4;
+	for (int i = 0; i < nv; i++) { k.vaddr[i] = vaddr[i]; k.vval[i] = vval[i]; }
+	for (int i = 0; i < nf; i++) { k.faddr[i] = faddr[i]; k.fval[i] = fval[i]; }
+	k.nv = (uint8_t)nv; k.nf = (uint8_t)nf;
+	return aq_push_op(3, &k);
+}
+int gfx_async_on(void);
+void gfx_async_settle(void);
 void gfx_vis_settle(void) { if (gfx_gpu_vis_deferred()) LOCKED(gfx_gpu_vis_flush(1)); }
 int gfx_transfer_downscale(uint32_t src, uint32_t sw, uint32_t sh, uint32_t sstride, uint32_t dst, uint32_t dstride) { int r = 0; LOCKED(if (gpu_backend()) r = gfx_gpu_transfer_downscale(src, sw, sh, sstride, dst, dstride)); return r; }   /* a CPU read of guest memory a GPU target may hold newer: the download only */
+static void end_body(void) { rc_on_end_scene(); gfxcap_end_scene(); if (gpu_backend()) gfx_gpu_end_scene(); else gfx_soft_end_scene(); }   /* (under the lock) */
 void gfx_end_scene(void) {
+	if (aq_push_op(2, 0)) return;
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
-	LOCKED_M(rc_on_end_scene(); gfxcap_end_scene(); if (gpu_backend()) gfx_gpu_end_scene(); else gfx_soft_end_scene());
+	LOCKED_M(end_body());
 	if (m) metrics_add_render(now_us() - t0);
 }
 void gfx_frame_queued(void) {   /* (the game's thread: under the lock, as its draws; only the motion vectors use it: RECOMP_MV, RECOMP_FSR) */
@@ -274,6 +403,7 @@ void gfx_present(uint32_t base, uint32_t width, uint32_t height, uint32_t pitch,
 	}
 	int m = metrics_on(); uint64_t t0 = m ? now_us() : 0;
 	presented++;
+	if (aq_stats_on() && presented % 300 == 0) aq_stats_report(300);
 	LOCKED_M(
 		gfxcap_present(base, width, height, pitch, format);
 		gfxcov_present(format);

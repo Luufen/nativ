@@ -237,6 +237,25 @@ static void kick_writes(uint32_t recs, uint32_t n) {
 static void signal_bump(void) { __atomic_add_fetch(&signal_counter, 1, __ATOMIC_SEQ_CST); }
 static void kick(Bridge *b) {
 	uint32_t na = RD32(b->in + 0x104), nb = RD32(b->in + 0x108);
+	extern int gfx_async_on(void); extern void gfx_async_settle(void);
+	extern int gfx_kick_async(const uint32_t *vaddr, const uint32_t *vval, int nv, const uint32_t *faddr, const uint32_t *fval, int nf);
+	extern void (*gfx_kick_done_hook)(void);
+	if (gfx_async_on()) {   /* (DECKPERF-02) the draws are on the renderer's worker: it writes these words when it has done them */
+		uint32_t va[32], vv[32], fa[4], fv[4]; int nv = 0, nf = 0, ok = 1;
+		for (uint32_t k = 0; k < (na < 32 ? na : 32); k++) {
+			uint32_t r = b->in + 0x140 + 12 * k, ctl = RD32(r), cpu = meminfo_cpu(RD32(r + 8));
+			if (!cpu || (ctl & 0xfffff) < 0xf) { ok = 0; break; }
+			va[nv] = cpu + (ctl & 0xfffff) - 0xf; vv[nv] = RD32(r + 4); nv++;
+		}
+		for (uint32_t k = 0; ok && k < (nb < 4 ? nb : 4); k++) {
+			uint32_t r = b->in + 0x2c0 + 12 * k, ctl = RD32(r), cpu = meminfo_cpu(RD32(r + 8));
+			if (!cpu || (ctl & 0xfffff) < 0xf) { ok = 0; break; }
+			fa[nf] = cpu + (ctl & 0xfffff) - 0xf; fv[nf] = RD32(r + 4); nf++;
+		}
+		gfx_kick_done_hook = signal_bump;
+		if (ok && gfx_kick_async(va, vv, nv, fa, fv, nf)) return;
+		gfx_async_settle();   /* (a record not understood: the old way, after the worker) */
+	}
 	kick_writes(b->in + 0x140, na < 32 ? na : 32);
 	/* the fragment phase's writes (the scene's notification) wait for its visibility counts when those are still on the
 	 * GPU: the renderer writes them right after the counts land (gfx_dispatch.c gfx_kick_defer) */
@@ -342,6 +361,7 @@ static void h_release(Cpu *c) { RET(0); }   /* PVRSRVRelease */
  * then stores the counter. The host's work completes at the kick, except a scene's notification held back for its
  * visibility counts (kick): those the wait completes first, waiting for the GPU as the console's would */
 static void h_signal_wait(Cpu *c) {
+	extern void gfx_async_settle(void); gfx_async_settle();   /* (DECKPERF-02) the renderer's worker done first: the GPU's work */
 	extern void gfx_vis_settle(void); gfx_vis_settle();
 	extern void gxm_finish_poll(void); gxm_finish_poll();   /* (a Finish under way: its words checked again, gxm_sony.c) */
 	if (A0) WR32(A0, __atomic_load_n(&signal_counter, __ATOMIC_SEQ_CST));
