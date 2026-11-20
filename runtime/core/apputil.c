@@ -242,6 +242,35 @@ static void h_save_slot_param(Cpu *c) {   /* (slot id, SceAppUtilSaveDataSlotPar
 	RET(0);
 }
 static void h_save_slot_set_param(Cpu *c) { RET(slot_write(A0, A1) == 0 ? 0 : 0x80100600u); }   /* (slot id, param, mount point): a slot not yet created is created */
+/* (MC-01) sceAppUtilSaveDataSlotSearch(SceAppUtilWorkBuffer * (buf +0, size +4), const SceAppUtilSaveDataSlotSearchCond *
+ * (type +0: 0 EXIST_SLOT, 1 EMPTY_SLOT; from +4, range +8; sort key/order +0xc/+0x10), SceAppUtilSlotSearchResult * (hitNum
+ * +0, slotList +4), mount point): the slots of [from, from+range) that exist (or are empty), ascending by id -- hitNum, and
+ * with a work buffer the list there (SceAppUtilSaveDataSlot, 16 bytes: id, status, userParam, emptyParam 0; an empty slot:
+ * id only), as many as the buffer holds. Contract: Vita3K 3ab53c9d SceAppUtil.cpp (which also ignores the sort order).
+ * Before: an unimplemented stub (0, the result untouched): Minecraft's "continue offline" save scan went back to its menu. */
+#define SLOT_SEARCH_MAX 256u   /* slot ids 0..255 */
+static uint32_t slot_u32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }   /* (a little-endian host, as the guest)*/
+static void h_save_slot_search(Cpu *c) {
+	if (!A1 || !A2) { RET(0x80100001u); return; }   /* SCE_APPUTIL_ERROR_PARAMETER */
+	const uint32_t type = RD32(A1), from = RD32(A1 + 4), range = RD32(A1 + 8);
+	if (type > 1) { RET(0x80100001u); return; }
+	uint32_t list = 0, cap = 0;
+	if (A0 && RD32(A0)) { list = RD32(A0); cap = RD32(A0 + 4) / 16; WR32(A2 + 4, list); }
+	else list = RD32(A2 + 4), cap = list ? SLOT_SEARCH_MAX : 0;
+	uint32_t hits = 0, end = from + range > SLOT_SEARCH_MAX || from + range < from ? SLOT_SEARCH_MAX : from + range;
+	for (uint32_t id = from; id < end; id++) {
+		uint8_t p[SLOT_PARAM_SIZE];
+		const int exists = slot_read(id, p);
+		if (exists != (type == 0)) continue;
+		if (hits < cap) {
+			const uint32_t e = list + 16 * hits;
+			WR32(e, id); WR32(e + 4, exists ? slot_u32(p) : 0); WR32(e + 8, exists ? slot_u32(p + 0x304) : 0); WR32(e + 12, 0);
+		}
+		hits++;
+	}
+	WR32(A2, hits);
+	RET(0);
+}
 /* (SceAppUtilSaveDataFileSlot * (id +0, slotParam +4), SceAppUtilSaveDataFile[], count, mount point, *required KB)
  * file: path +0, buf +4, size +8, offset +16 (64-bit), mode +24; 64 bytes each */
 /* (NIGHT-01) the save keeps the console's minimum duration (hle_offline.h hle_save_latency_ms): a game whose worker
@@ -905,7 +934,7 @@ const HleEntry hle_apputil[] = {
 	{"SceCommonDialog_D1858A78", h_eula_dlg_result}, {"SceCommonDialog_BEBAEF25", h_eula_dlg_term}, {"SceCommonDialog_B55CF0E3", h_eula_dlg_term},
 	{"sceCommonDialogUpdate", h_zero},
 	{"sceAppMgrIsGameProgram", h_is_game},   /* 1: a game -- libfios2 picks its default file mode by it */
-	{"sceAppUtilSaveDataSlotGetParam", h_save_slot_param}, {"sceAppUtilSaveDataSlotCreate", h_save_slot_create}, {"sceAppUtilSaveDataSlotDelete", h_save_slot_delete}, {"sceAppUtilSaveDataSlotSetParam", h_save_slot_set_param},
+	{"sceAppUtilSaveDataSlotGetParam", h_save_slot_param}, {"sceAppUtilSaveDataSlotCreate", h_save_slot_create}, {"sceAppUtilSaveDataSlotDelete", h_save_slot_delete}, {"sceAppUtilSaveDataSlotSetParam", h_save_slot_set_param}, {"sceAppUtilSaveDataSlotSearch", h_save_slot_search},
 	{"sceAppUtilSaveDataDataSave", h_save_data_save},
 	{"sceAppUtilSaveDataMount", h_save_data_mount}, {"sceAppUtilSaveDataUmount", h_save_data_umount},
 	{"sceAppUtilSaveDataDataRemove", h_save_data_remove},

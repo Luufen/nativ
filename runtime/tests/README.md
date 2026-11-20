@@ -199,6 +199,15 @@ against an older apputil.c: `-DAPPUTIL_UNDER_TEST='"<file>"'` (one fail per mess
 
     cc -O1 -g -Wall -D_GNU_SOURCE $INC -I $SDL3_INC dialog_result_test.c -o /tmp/dialog_result_test -lpthread && /tmp/dialog_result_test
 
+## Saved-data slot search: `savedata_slot_search_test.c`
+
+`sceAppUtilSaveDataSlotSearch` over apputil.c's slot store (MC-01): EXIST / EMPTY slots of [from, from+range), hitNum and
+the list in the work buffer (id, status, userParam), ascending, as far as the buffer holds; PARAMETER for a null cond or
+an unknown type. Fail-before: the name was missing from hle_apputil (the stub left hitNum untouched) -- compile with
+`-DAPPUTIL_UNDER_TEST='"<older apputil.c>"'`. Build as `dlg_term_test.c`:
+
+    cc -O1 -g -Wall -D_GNU_SOURCE $INC -I $SDL3_INC savedata_slot_search_test.c -o /tmp/savedata_slot_search_test -lpthread && /tmp/savedata_slot_search_test
+
 ## The common dialogs' Term contract: `dlg_term_test.c`
 
 Checks the `Term` handlers in `runtime/core/apputil.c` against the common-dialog contract: a `Term` with no

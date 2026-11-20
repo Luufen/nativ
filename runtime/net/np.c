@@ -347,8 +347,15 @@ static void h_np_off_check_callback(Cpu *c) {
 	if (cb) { if (np_log()) fprintf(stderr, "    np (offline): service state SIGNED_OUT -> callback %#x\n", cb); guest_call4(c, cb, 1, arg, 0, 0); }
 	RET(0);
 }
+/* (MC-01) The account itself is there while signed out: a Vita has its PSN account registered whether or not it is
+ * signed in, and the manager answers from it -- Vita3K 3ab53c9d SceNpManager.cpp answers sceNpManagerGetNpId,
+ * GetChatRestrictionFlag (0) and GetContentRatingFlag (0, an age) whatever its psn-signed-in setting. Offline they were
+ * the "not initialised" stubs (0x80550002), and Minecraft read a failed GetChatRestrictionFlag at its world start as "not
+ * signed in to PSN" and asked for a sign-in an offline game doesn't need. The same identity as online's (np.c above). */
 const HleEntry hle_np_offline[] = {
 	{"sceNpCmpNpId", h_np_cmp_npid},
+	{"sceNpManagerGetNpId", h_np_get_np_id}, {"sceNpManagerGetOnlineId", h_np_get_online_id}, {"sceNpManagerGetAccountRegion", h_np_region},
+	{"sceNpManagerGetContentRatingFlag", h_np_rating}, {"sceNpManagerGetChatRestrictionFlag", h_np_chat_restriction},
 	{"sceNpGetServiceState", h_np_off_state},
 	{"sceNpRegisterServiceStateCallback", h_np_off_register_state}, {"sceNpUnregisterServiceStateCallback", h_np_off_unregister_state},
 	{"sceNpCheckCallback", h_np_off_check_callback},

@@ -22,6 +22,7 @@
 uint8_t *recomp_mem;
 uint32_t recomp_watch_lo = 0, recomp_watch_hi = 0;
 void recomp_watch_write(uint32_t a, uint32_t v, int width) { (void)a; (void)v; (void)width; }
+int settings_int(const char *key, int def) { (void)key; return def; }   /* (np.c's age: the default) */
 
 /* the guest calls np.c makes, recorded */
 static uint32_t calls[8][3]; static int ncalls;
@@ -87,6 +88,25 @@ int main(void) {
 		check("sceNpCmpNpId(null) -> invalid argument 0x80550003", call("sceNpCmpNpId", A, 0) == 0x80550003u);
 		int online_has = 0; for (const HleEntry *e = hle_np; e->name; e++) if (!strcmp(e->name, "sceNpCmpNpId")) online_has = 1;
 		check("the online table answers sceNpCmpNpId too", online_has);
+	}
+
+	/* (MC-01) the registered account answers while signed out (Vita3K 3ab53c9d SceNpManager.cpp): before, offline, these
+	 * were the "not initialised" stubs and a title read a failed GetChatRestrictionFlag as "sign in to PSN first" */
+	{
+		setenv("RECOMP_ONLINE_ID", "tester", 1);
+		uint32_t ID = 0x22000, R = 0x22100, A = 0x22200;
+		memset(G(ID), 0xee, 0x24);
+		check("sceNpManagerGetNpId -> 0 offline", call("sceNpManagerGetNpId", ID, 0) == 0);
+		check("  the account's NP id: ntv_tester, platform psp2, valid", !strcmp((const char *)G(ID), "ntv_tester") && !memcmp(G(ID + 0x18), "psp2", 4) && *(uint8_t *)G(ID + 0x1c) == 1);
+		*(uint32_t *)G(R) = 0xdead;
+		check("sceNpManagerGetChatRestrictionFlag -> 0 offline, not restricted", call("sceNpManagerGetChatRestrictionFlag", R, 0) == 0 && *(uint32_t *)G(R) == 0);
+		*(uint32_t *)G(R) = 0xdead; *(uint32_t *)G(A) = 0;
+		check("sceNpManagerGetContentRatingFlag -> 0 offline, not restricted, an age", call("sceNpManagerGetContentRatingFlag", R, A) == 0 && *(uint32_t *)G(R) == 0 && *(uint32_t *)G(A) > 0);
+		memset(G(R), 0xee, 4);
+		check("sceNpManagerGetAccountRegion -> 0 offline, a region", call("sceNpManagerGetAccountRegion", R, A) == 0 && !strcmp((const char *)G(R), "us"));
+		memset(G(ID), 0, 0x14);
+		check("sceNpManagerGetOnlineId -> 0 offline, ntv_tester", call("sceNpManagerGetOnlineId", ID, 0) == 0 && !strcmp((const char *)G(ID), "ntv_tester"));
+		check("the service state stays SIGNED_OUT", call("sceNpGetServiceState", STATE, 0) == 0 && *(uint32_t *)G(STATE) == 1);
 	}
 
 	if (fails) { printf("%d FAILED\n", fails); return 1; }
