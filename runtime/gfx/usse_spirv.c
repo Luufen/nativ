@@ -2774,6 +2774,12 @@ SpirvModule usse_spirv_translate(const UsseProgram *prog, const UsseVertexLayout
 						continue;
 					}
 				}
+				/* (MC-PERF) an early exit from a then part straight to its if/else's end: `(p) BR` to else_end from inside
+				 * the then part. The then part's own closing jump (at else_at) goes there too, so skipping to else_at is
+				 * the same path: the rest of the then part becomes a nested skip range, and the closing jump then leaves
+				 * over the else part as before. (Minecraft's terrain vertex program: 0x81ceb478 instruction 27.) */
+				if (op->pred_kind != 0 && op->imm > 0 && !op->args[0] && nbr && brstack[nbr - 1].kind == 0 &&
+				    brstack[nbr - 1].else_at > i && target == brstack[nbr - 1].else_end) target = brstack[nbr - 1].else_at;
 				while (lp >= 0 && brstack[lp].kind != 1) lp--;   /* the innermost loop */
 				if (op->pred_kind != 0 && op->imm > 0 && !op->args[0] && lp >= 0 && (target == brstack[lp].back + 1 || target == brstack[lp].back)) {
 					/* break (to just past the back edge) or continue (to the back edge) */

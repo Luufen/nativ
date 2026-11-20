@@ -150,6 +150,12 @@ int main(void) {
 	/* three-way ladder: the nested if/else's closing jump at 9 is also the outer then's closing jump */
 	const uint64_t ladder[] = { br(P0, 10), NOP, br(P1, 6), NOP, NOP, NOP, NOP, br(P_NONE, 4), NOP, br(P_NONE, 2), NOP, NOP };
 	case_ok("three-way if ladder", ladder, 12, 1, 0, 2);
+	/* (MC-PERF) an early exit from the then part to the if/else's end: 0 (p0) BR +6 -> 6 | 1 NOP | 2 (p1) BR +7 -> 9 (the
+	 * end, past the else part) | 3 NOP | 4 NOP | 5 BR +4 -> 9 (the then part's closing jump) | 6..8 else | 9 NOP.
+	 * Refused before ("branch ... outside the structured forms"): one terrain vertex program's draws all went to the CPU */
+	const uint64_t early[] = { br(P0, 6), NOP, br(P1, 7), NOP, NOP, br(P_NONE, 4), NOP, NOP, NOP, NOP, NOP };
+	case_ok("then part leaving early to the if/else's end (vertex)", early, 11, 0, 0, 2);
+	case_ok("then part leaving early to the if/else's end (fragment)", early, 11, 1, 0, 2);
 	/* a while loop: header 0, (p0) BR +4 -> 5 = past the back edge (break), back edge 4: BR -4 -> 0 */
 	const uint64_t loop[] = { NOP, br(P0, 4), NOP, NOP, br(P_NONE, -4), NOP };
 	case_ok("loop + break", loop, 6, 1, 1, 1);
