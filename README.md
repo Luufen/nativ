@@ -1,6 +1,6 @@
 # Project Nativ: unofficial fork
 
-[This repository](https://github.com/Luufen/nativ---Updated-30-games-120-widescreen) is a community fork of [Project Nativ](https://github.com/TheLostPantheon/nativ),
+[This repository](https://github.com/Luufen/nativ-SP) is a community fork of [Project Nativ](https://github.com/TheLostPantheon/nativ),
 not an official release; the original README follows [below](#project-nativ). It adds packs for more games, so
 Nativ can rebuild your own copy of them, a launcher and in-game menu you can use with a controller or a touch
 screen alone, and exports for a Steam Deck and for Android. Its releases are tagged `vX.Y.Z-lfN` (based on upstream
@@ -8,8 +8,8 @@ screen alone, and exports for a Steam Deck and for Android. Its releases are tag
 
 **No game comes with this repository or its releases**, as with upstream: you need your own copy of each game, dumped
 from a Vita you own, and Sony's firmware update file.
-Generic fixes are also offered upstream as pull requests. Problems with these builds belong in
-[this fork's issues](https://github.com/Luufen/nativ---Updated-30-games-120-widescreen/issues), not upstream's.
+Problems with these builds belong in
+[this fork's issues](https://github.com/Luufen/nativ-SP/issues), not upstream's.
 
 ## Download and start
 
@@ -45,13 +45,47 @@ Exit status 0 means done, 1 that the work failed, 2 a bad command line or a titl
 own flags after `--` are `--fullscreen` and `--windowed`. The variables `ATIV_DUMP`, `ATIV_PREFS` and `ATIV_TASK` still
 work.
 
+## Steam Deck
+
+The Deck runs the Linux downloads natively, no Windows layer in between:
+
+- **Desktop Mode:** start `ProjectNativ-<tag>-linux.AppImage` (Properties > Permissions > "Is executable", or
+  `chmod +x`), or extract the tarball and run `ProjectNativ/Project Nativ.sh`. The launcher works with the Deck's
+  buttons and touch screen alone; add, build and play your games there as on a PC.
+- **Game Mode:** on a game's page in the launcher, **Add to Steam** makes a Steam shortcut for that game (it starts
+  `nativ --play <title>`, without the launcher window); switch to Game Mode and start it from your library. You can
+  also add the AppImage or `Project Nativ.sh` itself as a non-Steam game to get the launcher in Game Mode. Since lf16
+  these shortcuts start again: in lf10 to lf15 every run without the launcher window crashed at once.
+- **One file per game:** on a PC, a built game's page > **Export** > **Linux / Steam Deck** makes one `.AppImage`
+  that holds that game and what it needs. Copy it to the Deck, mark it executable and add it to Steam (Desktop Mode:
+  Steam > Add a Game > Add a Non-Steam Game). On Windows the export runs in WSL and needs the one-time Linux toolchain
+  setup (`runtime/platform/linux/setup-toolchain.sh`). It holds code made from your copy of the game: keep it for
+  yourself.
+
+**Verified on a Steam Deck:** Uncharted: Golden Abyss (EU) at **60 fps in Game Mode**, as an exported AppImage started
+from a Steam shortcut: a recorded play-through replayed through Steam ran at 60 fps (median) in scenes with up to about
+1400 draws, where lf15 managed 15 or less in Game Mode; the owner then played it at 60 fps ("works perfectly"; a short
+run). Medieval Defenders and Soul Sacrifice Delta ran as exported AppImages before. Two changes made the difference:
+
+- The window no longer waits for the screen while it holds the renderer: in Game Mode the compositor (gamescope)
+  paces each frame, and the renderer stood still for most of it.
+- **Renderer worker:** a played game translates its draws on a thread of their own, beside the game. It is on by
+  default when you play (test runs without a window leave it off); `RECOMP_GFX_ASYNC=0` turns it off (Steam: set the
+  shortcut's launch options to `RECOMP_GFX_ASYNC=0 %command%`), for a comparison or if a game draws wrongly with it.
+
+**Performance log:** in the game, F10 > Performance > **Record a performance log** (or `RECOMP_PERF_LOG=1`) writes
+one line a second to `perflog/perf-<date>-<time>.csv` in the game's folder (for an exported AppImage
+`~/.local/share/ProjectNativ/Exported/<title>/perflog/`): frame rate, frame times, draws, CPU and GPU load and where the
+renderer spends its time. Attach it to an issue about speed on the Deck. It counts some frames twice while the
+renderer worker is on, so read its frame rate as approximate.
+
 ## Tested games
 
 A pack is a game's settings file: it tells Nativ how to rebuild that game from your copy, which it recognises by the
 SHA-256 of the game's main program. It holds no game code or data. Upstream's four games are unchanged. Frame rate is the highest the game offers in this fork, widescreen the widest picture it fills (16:9: wider screens get black bars at the sides).
 Version is the game release the pack supports. Tested: Yes if this fork ran the game, played or in automated test runs. Every game can render at up to 6× the Vita's 960×544; 4K (4×) was
 checked in the test runs of all of them except Tearaway, LittleBigPlanet, Resistance: Burning Skies, Gundam Breaker 3,
-Phantasy Star Nova and the two Persona Dancing games from PersonaDancingRecomp.
+Phantasy Star Nova, Minecraft and the two Persona Dancing games from PersonaDancingRecomp.
 
 | Game | Title ID | Version | Tested | Frame rate | Widescreen | Max resolution |
 |---|---|---|---|---|---|---|
@@ -89,6 +123,7 @@ Phantasy Star Nova and the two Persona Dancing games from PersonaDancingRecomp.
 | Gundam Breaker 3 (Asia) | PCSH00208 | 1.30 | No (tested by Tzeentchnet) | 30 | not checked yet | not checked yet |
 | Phantasy Star Nova (Asia, Chinese) | PCSH00143 | 1.00 | Yes | 30 | not checked yet | not checked yet |
 | Phantasy Star Nova (Japan) | PCSG00351 | 1.05 | Yes | up to 60 | not checked yet | not checked yet |
+| Minecraft: PlayStation Vita Edition (EU) | PCSB00560 | 1.70 | Yes | about 56 measured in a world; higher not checked yet | not checked yet | not checked yet |
 
 Most of these packs were made with the fork's porting tools (below): they hold what Nativ needs to build and boot the
 game from your copy, plus frame-rate and widescreen settings found automatically.
@@ -100,7 +135,7 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 ## What's new compared with Project Nativ v0.1.5
 
 **Games**
-- **34 more games** than upstream's 4 (see [Tested games](#tested-games)): they render at **up to 6× the Vita's
+- **35 more games** than upstream's 4 (see [Tested games](#tested-games)): they render at **up to 6× the Vita's
   resolution (4K and beyond)**, 10 of them run at **up to 120 fps** and 7 fill **21:9** widescreen.
 - **A game without a pack still gets a start:** adding it writes a first pack automatically.
 
@@ -114,7 +149,11 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 - **Export** a built game for your own devices: **another Windows PC**, a **Steam Deck** (AppImage) or an **Android**
   phone or tablet (`.apk`). Steam Deck and Android builds run in WSL on Windows and need a one-time toolchain setup
   (`runtime/platform/linux/setup-toolchain.sh`, `runtime/platform/android/setup-toolchain.sh`).
-- **Add to Steam**, also from the Steam Deck's Game Mode. English and German; any window size or fullscreen.
+- **Add to Steam**, also from the Steam Deck's Game Mode (its shortcuts start again since lf16, see
+  [Steam Deck](#steam-deck)). English and German; any window size or fullscreen.
+- **Command line** (`--list`, `--play`, `--build`, `--add`, `--data-dir`, `--fullscreen`, `--windowed`), **portable**
+  zip and tarball (library, settings and caches in the install's folder) and a **Linux tarball** beside the AppImage;
+  see [Download and start](#download-and-start).
 - Logs and bug reports leave out your user folder and account IDs.
 
 **In the game** (F10, Start + Select, or the PS button)
@@ -123,13 +162,16 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 - **On-screen buttons for touch play**; stick sensitivity and dead zone; which controller and camera to use.
 - **Game language**: your computer's or any of the Vita's 20.
 - **Cheats** (VitaCheat `.psv` files) switched on and off while playing.
-- **Performance overlay** (F1): frame times, CPU and GPU load, memory.
+- **Performance overlay** (F1): frame times, CPU and GPU load, memory; a **performance log** to a CSV file
+  (F10 > Performance).
 
 **Picture and sound**
 - **120 fps, widescreen and 4K** in more games.
 - **ATRAC9 and AAC audio**, movies with their soundtrack, smoother sound, fixes for games using FMOD.
 - **Short waits on time on Windows**: a game's brief sleeps with callbacks (and its vblank waits) took up to 16 ms
   there and cost frames; Phantasy Star Nova (Japan) went from below 30 to 60 fps with this.
+- **Steam Deck at 60 fps:** a renderer worker thread and a window that no longer waits for the screen while holding
+  the renderer took Uncharted: Golden Abyss from 15 or less to 60 fps in the Deck's Game Mode (see [Steam Deck](#steam-deck)).
 - Many GPU fixes: instanced draws, shader subroutines, more texture and render-target formats.
 
 **The Vita's hardware, without a Vita**
@@ -153,12 +195,15 @@ Android); others stop at a missing function or a feature Nativ doesn't have yet.
 - Windows 11 (x64): Soul Sacrifice Delta, Persona 4: Dancing All Night, Tearaway and Resistance: Burning Skies (US
   1.02, also at 60 and 120 fps), Killzone: Mercenary (EU, also at 120 fps) and LittleBigPlanet (30 fps, and the hint
   shown for 60 / 120) and Phantasy Star Nova (Asia, past character creation, with an in-game save; Japan 1.05 with the
-  English patch as a data mod, at 60 fps) played from a local build of the same source; for every game, see the Tested column above.
-- Steam Deck: Medieval Defenders and Soul Sacrifice Delta, each exported as an AppImage (`vitarecomp export-appimage`).
+  English patch as a data mod, at 60 fps) and Minecraft: PlayStation Vita Edition (a world started and played, about
+  56 fps) played from a local build of the same source; for every game, see the Tested column above.
+- Steam Deck: Uncharted: Golden Abyss (EU) at 60 fps in Game Mode (from a Steam shortcut), Medieval Defenders and Soul
+  Sacrifice Delta, each exported as an AppImage (`vitarecomp export-appimage`).
 - Android (Samsung Galaxy Tab S7, Android 13): AQUA KITTY DX and Soul Sacrifice Delta, each exported as an `.apk`,
   played by touch with picture, sound and movies.
 - Each release's Windows launcher passes the controller, touch, scroll, export and screen-fit tests. The Linux
-  AppImage is built and packaged only; no game has been run with it by this fork. The current releases are built on
+  tarball added, built and started Medieval Defenders in a test on Linux; the launcher AppImage is built and packaged
+  only. The current releases are built on
   Linux and have no macOS `.dmg`.
 
 ## Contributing with an AI assistant
